@@ -83,7 +83,7 @@ python tools/log_manager.py cleanup 30
 | `max_log_age` | 应用运行日志 `monitor_*.log` 保留天数 |
 | `dnd_enabled` / `dnd_start_time` / `dnd_end_time` | 勿扰开关与时段（HH:MM，可跨日） |
 | `push_markdown_enabled` | 结构化消息（默认开启）：企业微信/钉钉用 markdown、飞书用富文本 post 按行分条展示；Bark/PushPlus/SMTP/通用 Webhook 等不支持富文本的渠道仍发纯文本。渠道不支持时自动回退纯文本 |
-| `media_batch_summary_enabled` | 影视/相册事件聚合推送（默认开启）：影视入库、相册分享等高频同类事件在静默窗口内合并为一条结构化消息（标题带条数、正文逐条列出），批量刮削入库不再刷屏 |
+| `media_batch_summary_enabled` | 影视资源事件聚合推送（默认开启）：影视入库、刮削完成、资源删除等高频同类事件在静默窗口内合并为一条结构化消息（标题带条数、正文逐条列出），批量刮削入库不再刷屏；影视登录/退出等会话事件不参与聚合，保持逐条及时推送 |
 | `media_batch_window` | 聚合静默窗口（秒，默认 90）：窗口内无新事件才发送；单条滞留超过窗口 4 倍强制发出；`0` 表示按轮询轮次立即发送 |
 | `push_emoji_enabled` | 已废弃：推送文案模板已不再携带 emoji 图标，此开关保留仅为兼容旧配置，不再产生效果 |
 | `ssh_ignore_loopback` | 忽略来源为 127.0.0.1 / ::1 的 SSH 登录成功与断开（默认关闭；失败告警不受影响；SSH 经 frp 等内网穿透接入时勿开启）。环境变量 `SSH_IGNORE_LOOPBACK` |

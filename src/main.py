@@ -45,12 +45,10 @@ from web.ui_app import start_ui_server_in_background
 TRIMMEDIA_POLL_EVENTS = frozenset({"TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED"})
 TRIMACTIVITY_POLL_EVENTS = frozenset({"MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT"})
 
-# 影视/相册等高频同类事件：开启聚合窗口后在静默期内合并为一条消息，避免批量刮削刷屏
+# 聚合推送只针对高频同质的批量事件（批量刮削入库/刮削/删除）：
+# 登录/退出/分享等低频会话事件保持逐条及时推送，不进聚合窗口
 MEDIA_DEFER_EVENTS = frozenset({
     "TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED",
-    "MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT", "MEDIA_USER_CREATED",
-    "PHOTO_SHARE_CREATED", "PHOTO_SHARE_EXPIRED", "PHOTO_DEVICE_REGISTERED",
-    "FACE_RECOGNITION_UPDATED",
 })
 
 
