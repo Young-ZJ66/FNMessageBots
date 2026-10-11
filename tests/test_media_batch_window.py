@@ -73,9 +73,10 @@ class MediaBatchWindowCase(unittest.TestCase):
         self.assertEqual(len(due), 1, "滞留超过硬上限的事件必须强制到期")
 
     def test_non_media_item_due_immediately(self):
-        self.app._enqueue_unified_batch_items([_media_item("DOCKER_CONTAINER_START", source="docker")])
+        # Docker 异常信号（OOM/DIE/KILL）不入聚合窗口，随时可刷出
+        self.app._enqueue_unified_batch_items([_media_item("DOCKER_CONTAINER_OOM", source="docker")])
         due = self.app._take_unified_batch_buf()
-        self.assertEqual(len(due), 1, "非媒体事件不入聚合窗口")
+        self.assertEqual(len(due), 1, "非聚合事件不入聚合窗口")
 
     def test_disabled_flag_or_zero_window_disables_defer(self):
         self.app.config.media_batch_summary_enabled = False
@@ -94,13 +95,23 @@ class MediaBatchWindowCase(unittest.TestCase):
         self.assertEqual(len(due), 1, "force 必须取出全部")
         self.assertEqual(self.app._unified_batch_buf, [], "force 后队列应为空")
 
+    def test_docker_lifecycle_deferred_but_oom_immediate(self):
+        """Docker 生命周期流转进聚合窗口（compose 批量部署易突发），异常信号即时。"""
+        self.app._enqueue_unified_batch_items([
+            _media_item("DOCKER_CONTAINER_START", source="docker"),
+            _media_item("DOCKER_CONTAINER_OOM", source="docker"),
+        ])
+        due = self.app._take_unified_batch_buf()
+        self.assertEqual([it["event_type"] for it in due], ["DOCKER_CONTAINER_OOM"])
+        self.assertEqual(len(self.app._unified_batch_buf), 1)
+
     def test_mixed_items_split_by_due(self):
         self.app._enqueue_unified_batch_items(
-            [_media_item(), _media_item("DOCKER_CONTAINER_STOP", source="docker")]
+            [_media_item(), _media_item("DOCKER_CONTAINER_OOM", source="docker")]
         )
-        # DOCKER 立即到期；媒体项仍在窗口内
+        # OOM 即时到期；媒体项仍在窗口内
         due = self.app._take_unified_batch_buf()
-        self.assertEqual([it["event_type"] for it in due], ["DOCKER_CONTAINER_STOP"])
+        self.assertEqual([it["event_type"] for it in due], ["DOCKER_CONTAINER_OOM"])
         self.assertEqual(len(self.app._unified_batch_buf), 1)
         # 静默后媒体项到期
         self.app._unified_last_enqueue_ts = time.time() - 120

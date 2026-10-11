@@ -45,11 +45,26 @@ from web.ui_app import start_ui_server_in_background
 TRIMMEDIA_POLL_EVENTS = frozenset({"TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED"})
 TRIMACTIVITY_POLL_EVENTS = frozenset({"MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT"})
 
-# 聚合推送只针对高频同质的批量事件（批量刮削入库/刮削/删除）：
-# 登录/退出/分享等低频会话事件保持逐条及时推送，不进聚合窗口
+# 聚合推送只针对高频同质的批量事件：
+# - 影视批量刮削入库/刮削/删除（外部库轮询）
+# - 主日志中的文件/共享操作（批量删除、同步工具触发的共享变更）
+# - Docker 生命周期流转（compose 批量部署易突发）
+# 登录/退出、DIE/OOM/KILL 等会话与异常信号保持逐条及时推送，不进聚合窗口
 MEDIA_DEFER_EVENTS = frozenset({
     "TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED",
 })
+MAIN_LOG_AGGREGATE_EVENTS = frozenset({
+    "DeleteFile", "MovetoTrashbin", "ARCHIVING_SUCCESS",
+    "SHARE_EVENTID_DEL", "SHARE_EVENTID_PUT",
+})
+DOCKER_LIFECYCLE_DEFER_EVENTS = frozenset({
+    "DOCKER_CONTAINER_CREATE", "DOCKER_CONTAINER_START", "DOCKER_CONTAINER_STOP",
+    "DOCKER_CONTAINER_RESTART", "DOCKER_CONTAINER_PAUSE", "DOCKER_CONTAINER_UNPAUSE",
+    "DOCKER_CONTAINER_DESTROY",
+})
+AGGREGATED_EVENT_TYPES = (
+    MEDIA_DEFER_EVENTS | MAIN_LOG_AGGREGATE_EVENTS | DOCKER_LIFECYCLE_DEFER_EVENTS
+)
 
 
 class Application:
@@ -147,7 +162,7 @@ class Application:
         for it in items:
             if isinstance(it, dict):
                 it["_enqueued_at"] = now
-                it["_deferred"] = bool(defer and str(it.get("event_type") or "") in MEDIA_DEFER_EVENTS)
+                it["_deferred"] = bool(defer and str(it.get("event_type") or "") in AGGREGATED_EVENT_TYPES)
         merged = dedupe_poll_batch_items(list(items))
         if not merged:
             return
@@ -696,6 +711,15 @@ class Application:
                     poller.add_handler(event_type, handler)
             registered += 1
         print(f"已注册 {registered} 个事件处理器")
+
+        # 主日志源的高频文件/共享操作接入聚合队列：
+        # 仅在聚合刷盘线程运行、且未开启「轮询汇总模式」（整轮批处理已覆盖）时生效
+        if self.log_poller:
+            whole_round_mode = bool(getattr(self.config, "poll_batch_summary_enabled", False))
+            self.log_poller.set_deferred_events(
+                MAIN_LOG_AGGREGATE_EVENTS,
+                self._enqueue_unified_batch_items if (self._media_batch_enabled() and not whole_round_mode) else None,
+            )
 
     def reload_config(self) -> None:
         """保存配置后热加载：从配置文件重新加载并更新通知器与轮询器，无需重启容器。"""

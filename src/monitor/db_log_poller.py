@@ -185,6 +185,9 @@ class DBLogPoller:
         self.media_lib_service_patterns = [str(p).strip() for p in (media_lib_service_patterns or []) if str(p).strip()]
         self.event_handlers: Dict[str, Callable] = {}
         self.batch_handler: Optional[Callable[[List[Dict[str, Any]]], None]] = None
+        # 高频同类事件的聚合队列挂钩（DeleteFile/共享变更等，见 main.AGGREGATED_EVENT_TYPES）
+        self.deferred_events: frozenset = frozenset()
+        self.deferred_enqueue: Optional[Callable[[List[Dict[str, Any]]], None]] = None
         # 当 SSH journal 轮询可用时，跳过库内 Sshd*，避免双推
         self.skip_ssh_events = False
         # 与 SshJournalPoller 一致：忽略本机回环的 SSH 登录成功 / 断开
@@ -215,6 +218,19 @@ class DBLogPoller:
     def set_batch_handler(self, handler: Optional[Callable[[List[Dict[str, Any]]], None]]) -> None:
         """注册按轮询批量处理函数（同一轮仅调用一次）。"""
         self.batch_handler = handler
+
+    def set_deferred_events(
+        self,
+        event_types,
+        enqueue: Optional[Callable[[List[Dict[str, Any]]], None]],
+    ) -> None:
+        """按事件类型把主日志事件转入聚合队列（其余事件仍逐条分发）。
+
+        用于 DeleteFile/共享变更等高频同质事件的静默窗口聚合；
+        仅在聚合刷盘线程运行（enqueue 非 None）时生效。
+        """
+        self.deferred_events = frozenset(event_types or ())
+        self.deferred_enqueue = enqueue
 
     def update_config(
         self,
@@ -408,6 +424,10 @@ class DBLogPoller:
                 # 兼容旧逻辑：未注册批处理时按条处理
                 for item in batch_events:
                     try:
+                        if self.deferred_enqueue and item["event_type"] in self.deferred_events:
+                            # 高频同类事件转入聚合队列（静默窗口内合并推送）
+                            self.deferred_enqueue([item])
+                            continue
                         item["handler"](item["event_data"], item["entry"])
                     except Exception as e:
                         self.logger.error("处理事件失败 eventId=%s: %s", item["db_event_id"], e)

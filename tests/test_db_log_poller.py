@@ -377,5 +377,56 @@ class TestCursorSemanticsPreserved(TempDbCase):
         self.assertEqual(len(self.delivered), 2)
 
 
+class TestDeferredEventDispatch(TempDbCase):
+    """高频文件/共享事件按类型转入聚合队列，其余仍逐条分发。"""
+
+    def test_deferred_type_enqueued_others_dispatched(self):
+        poller = self.build_poller(events=("LoginSucc", "DeleteFile"))
+        enqueued = []
+        poller.set_deferred_events({"DeleteFile"}, lambda items: enqueued.extend(items))
+
+        insert(self.conn, "LoginSucc")
+        poller._align_cursor_on_start()
+        insert(self.conn, "DeleteFile")
+        insert(self.conn, "DeleteFile")
+        insert(self.conn, "LoginSucc")
+        cursor = poller._poll_once(1)
+
+        self.assertEqual(cursor, 4)
+        # DeleteFile 两行进聚合队列
+        self.assertEqual(len(enqueued), 2)
+        self.assertTrue(all(it["event_type"] == "DeleteFile" for it in enqueued))
+        self.assertTrue(all("row_id" in it and it["event_data"].get("_source") for it in enqueued))
+        # LoginSucc 仍走逐条处理器
+        self.assertEqual(len(self.delivered), 1)
+        self.assertEqual(self.delivered[0][0], "LoginSucc")
+        # 游标正常推进（聚合项同样不回退）
+        self.assertEqual(poller._poll_once(cursor), 4)
+        self.assertEqual(len(enqueued), 2)
+
+    def test_no_enqueue_falls_back_to_handler(self):
+        poller = self.build_poller(events=("DeleteFile",))
+        insert(self.conn, "DeleteFile")
+        poller._align_cursor_on_start()
+        insert(self.conn, "DeleteFile")
+        # 未挂聚合队列（或聚合关闭）：逐条分发，不丢事件
+        cursor = poller._poll_once(1)
+        self.assertEqual(cursor, 2)
+        self.assertEqual(len(self.delivered), 1)
+        self.assertEqual(self.delivered[0][0], "DeleteFile")
+
+    def test_deferred_hook_cleared(self):
+        poller = self.build_poller(events=("DeleteFile",))
+        enqueued = []
+        poller.set_deferred_events({"DeleteFile"}, lambda items: enqueued.extend(items))
+        poller.set_deferred_events({"DeleteFile"}, None)
+        insert(self.conn, "DeleteFile")
+        poller._align_cursor_on_start()
+        insert(self.conn, "DeleteFile")
+        poller._poll_once(1)
+        self.assertEqual(enqueued, [])
+        self.assertEqual(len(self.delivered), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
