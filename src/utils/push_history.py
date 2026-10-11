@@ -10,7 +10,8 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from zoneinfo import ZoneInfo
+
+from utils.logtime_display import get_display_timezone, local_tzinfo
 
 _lock = threading.Lock()
 _db_path: str = ""
@@ -259,7 +260,7 @@ def add_record(
     """写入一条推送记录。若总条数超过 MAX_RECORDS，删除最老的 DELETE_BATCH 条。"""
     if not _db_path:
         return
-    created_at = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+    created_at = datetime.now(get_display_timezone() or local_tzinfo()).strftime("%Y-%m-%d %H:%M:%S")
     detail_str = _serialize_detail(detail)
     if summary and len(summary) > 500:
         summary = summary[:497] + "..."
@@ -409,7 +410,7 @@ def get_today_counts() -> Dict[str, int]:
     """返回当日统计：total, success, fail（Asia/Shanghai，当天字符串匹配）。"""
     if not _db_path:
         return {"total": 0, "success": 0, "fail": 0}
-    today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+    today = datetime.now(get_display_timezone() or local_tzinfo()).strftime("%Y-%m-%d")
     with _lock:
         conn = _conn()
         try:

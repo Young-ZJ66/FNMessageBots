@@ -4,7 +4,6 @@
   "feishu_webhook_url": "",
   "bark_url": "",
   "bark_icon": "",
-  "magic_push_params": "",
   "smtp_params": "",
   "monitor_events": [
     "LoginSucc",
@@ -53,6 +52,7 @@
   "photo_db_path": "/usr/local/apps/@appdata/trim.photos/db/photo.db",
   "scheduler_db_path": "/var/apps/fn-scheduler/var/scheduler.db",
   "logger_poll_interval": 5,
+  "resume_from_cursor_on_start": false,
   "poll_batch_summary_enabled": false,
   "max_log_age": 7,
   "log_retention_days": 7,
@@ -60,12 +60,13 @@
   "dnd_start_time": "22:00",
   "dnd_end_time": "07:00",
   "pushplus_params": "",
-  "wecom_app_params": "",
   "webhook_params": "",
   "meow_params": "",
   "user_display_map": {},
   "title_prefix": "飞牛NAS",
   "minimal_push_enabled": false,
+  "push_markdown_enabled": true,
+  "push_emoji_enabled": false,
   "ssh_ignore_loopback": false,
   "nas_patrol_enabled": false
 }

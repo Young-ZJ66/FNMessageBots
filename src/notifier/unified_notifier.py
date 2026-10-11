@@ -14,10 +14,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Set, Tuple
-from zoneinfo import ZoneInfo
 
 from config import TITLE_PREFIX_DEFAULT
-from utils.logtime_display import get_logtime_display_offset_seconds
+from utils.logtime_display import (
+    get_display_timezone,
+    get_logtime_display_offset_seconds,
+    local_tzinfo,
+)
 from .multi_platform_notifier import DOCKER_CONTAINER_EVENT_TYPES, MultiPlatformNotifier
 from monitor.db_log_poller import DB_EVENT_ID_TO_PROJECT
 from monitor.sqlite_uri import connect_readonly_with_fallback
@@ -148,13 +151,13 @@ class UnifiedNotifier:
             bark_url=config.bark_url,
             bark_icon=getattr(config, "bark_icon", "") or "",
             pushplus_params=config.pushplus_params,
-            magic_push_params=getattr(config, "magic_push_params", "") or "",
             smtp_params=getattr(config, "smtp_params", "") or "",
-            wecom_app_params=getattr(config, "wecom_app_params", "") or "",
             webhook_params=getattr(config, "webhook_params", "") or "",
             meow_params=getattr(config, "meow_params", "") or "",
             title_prefix=getattr(config, "title_prefix", TITLE_PREFIX_DEFAULT),
             minimal_push_enabled=bool(getattr(config, "minimal_push_enabled", False)),
+            markdown_enabled=bool(getattr(config, "push_markdown_enabled", True)),
+            plain_emoji_enabled=not bool(getattr(config, "push_emoji_enabled", False)),
             poll_batch_summary_enabled=bool(getattr(config, "poll_batch_summary_enabled", False)),
             user_lookup_db_path=getattr(config, "trim_media_db_path", "") or "",
             activity_user_lookup_db_path=getattr(config, "trim_activity_db_path", "") or "",
@@ -162,7 +165,8 @@ class UnifiedNotifier:
             dedup_window=config.dedup_window,
             pool_size=config.http_pool_size,
             retries=config.http_retry_count,
-            timeout=config.http_timeout
+            timeout=config.http_timeout,
+            merged_event_recorder=self._record_merged_event_send,
         )
         self.logger.debug("多平台通知器已初始化")
 
@@ -176,13 +180,13 @@ class UnifiedNotifier:
             bark_url=self.config.bark_url,
             bark_icon=getattr(self.config, "bark_icon", "") or "",
             pushplus_params=self.config.pushplus_params,
-            magic_push_params=getattr(self.config, "magic_push_params", "") or "",
             smtp_params=getattr(self.config, "smtp_params", "") or "",
-            wecom_app_params=getattr(self.config, "wecom_app_params", "") or "",
             webhook_params=getattr(self.config, "webhook_params", "") or "",
             meow_params=getattr(self.config, "meow_params", "") or "",
             title_prefix=getattr(self.config, "title_prefix", TITLE_PREFIX_DEFAULT),
             minimal_push_enabled=bool(getattr(self.config, "minimal_push_enabled", False)),
+            markdown_enabled=bool(getattr(self.config, "push_markdown_enabled", True)),
+            plain_emoji_enabled=not bool(getattr(self.config, "push_emoji_enabled", False)),
             poll_batch_summary_enabled=bool(getattr(self.config, "poll_batch_summary_enabled", False)),
             user_lookup_db_path=getattr(self.config, "trim_media_db_path", "") or "",
             activity_user_lookup_db_path=getattr(self.config, "trim_activity_db_path", "") or "",
@@ -191,6 +195,7 @@ class UnifiedNotifier:
             pool_size=self.config.http_pool_size,
             retries=self.config.http_retry_count,
             timeout=self.config.http_timeout,
+            merged_event_recorder=self._record_merged_event_send,
         )
         if old:
             try:
@@ -275,13 +280,13 @@ class UnifiedNotifier:
             return 0
 
     def _in_dnd_window(self) -> bool:
-        """当前时间是否在勿扰时段内（使用 Asia/Shanghai）。"""
+        """当前时间是否在勿扰时段内（按统一展示时区 DISPLAY_TIMEZONE，默认 Asia/Shanghai）。"""
         enabled = getattr(self.config, "dnd_enabled", False)
         if not enabled:
             return False
         start_s = getattr(self.config, "dnd_start_time", "22:00") or "22:00"
         end_s = getattr(self.config, "dnd_end_time", "07:00") or "07:00"
-        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        now = datetime.now(get_display_timezone() or local_tzinfo())
         current = now.hour * 60 + now.minute
         start_m = self._dnd_minutes_since_midnight(start_s)
         end_m = self._dnd_minutes_since_midnight(end_s)
@@ -322,7 +327,7 @@ class UnifiedNotifier:
             return None, None
         start_s = getattr(self.config, "dnd_start_time", "22:00") or "22:00"
         end_s = getattr(self.config, "dnd_end_time", "07:00") or "07:00"
-        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        now = datetime.now(get_display_timezone() or local_tzinfo())
         start_m = self._dnd_minutes_since_midnight(start_s)
         end_m = self._dnd_minutes_since_midnight(end_s)
         current_m = now.hour * 60 + now.minute
@@ -600,6 +605,45 @@ class UnifiedNotifier:
         except Exception:
             pass
 
+    def _record_merged_event_send(
+        self,
+        event_type: str,
+        count: int,
+        success: bool,
+        channel_results: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """合并事件（磁盘唤醒/休眠）真正发出后的补记。
+
+        合并发送发生在 MultiPlatformNotifier 的定时线程里，不经过 send_notification 调用栈，
+        原实现既不进推送统计也不进推送记录；入队那一刻反而被当作「成功」计入统计。
+        这里仅在**真实投递结果**返回后补记，使统计与推送记录和实际发送一致。
+        """
+        try:
+            from utils.push_stats import record as record_push
+
+            record_push(bool(success))
+        except Exception:
+            pass
+        try:
+            from utils.push_history import add_record as add_push_history
+
+            channel_results_list = channel_results if isinstance(channel_results, list) else []
+            summary = f"磁盘事件合并推送 {event_type} × {int(count or 0)}"
+            detail: Dict[str, Any] = {
+                "kind": "merged_disk_event",
+                "event_type": event_type,
+                "merged_count": int(count or 0),
+                "channel_results": _truncate_channel_results_for_storage(channel_results_list),
+            }
+            if not success:
+                detail["failure_summary"] = (
+                    _failure_summary_from_channel_results(channel_results_list)
+                    or "未配置推送渠道或全部渠道发送失败"
+                )
+            add_push_history(success=bool(success), event_type=event_type, summary=summary, detail=detail)
+        except Exception:
+            pass
+
     def send_notification(self, 
                          event_type: str,
                          event_data: Dict[str, Any],
@@ -637,6 +681,14 @@ class UnifiedNotifier:
             return NotificationResult(
                 success=True,
                 method="duplicate_skipped",
+                details={"event_type": event_type, "skipped": skipped},
+            )
+        if skipped == "deferred":
+            # 磁盘事件已入合并队列，真正投递由合并窗口完成：此处既不算成功也不算失败，
+            # 避免推送统计/推送记录把「入队」误记为「已投递」。
+            return NotificationResult(
+                success=True,
+                method="disk_merge_deferred",
                 details={"event_type": event_type, "skipped": skipped},
             )
         try:
@@ -709,12 +761,8 @@ class UnifiedNotifier:
             active_platforms.append('bark')
         if self.config.pushplus_params:
             active_platforms.append('pushplus')
-        if getattr(self.config, "magic_push_params", ""):
-            active_platforms.append('magic_push')
         if getattr(self.config, "smtp_params", ""):
             active_platforms.append('smtp')
-        if getattr(self.config, "wecom_app_params", ""):
-            active_platforms.append('wecom_app')
         if getattr(self.config, "webhook_params", ""):
             active_platforms.append('webhook')
         if getattr(self.config, "meow_params", ""):
@@ -786,12 +834,8 @@ class UnifiedNotifier:
             active_platforms.append('bark')
         if self.config.pushplus_params:
             active_platforms.append('pushplus')
-        if getattr(self.config, "magic_push_params", ""):
-            active_platforms.append('magic_push')
         if getattr(self.config, "smtp_params", ""):
             active_platforms.append('smtp')
-        if getattr(self.config, "wecom_app_params", ""):
-            active_platforms.append('wecom_app')
         if getattr(self.config, "webhook_params", ""):
             active_platforms.append('webhook')
         if getattr(self.config, "meow_params", ""):
@@ -846,9 +890,7 @@ class UnifiedNotifier:
                 'feishu': False,
                 'bark': False,
                 'pushplus': False,
-                'magic_push': False,
                 'smtp': False,
-                'wecom_app': False,
                 'webhook': False,
                 'meow': False,
             }

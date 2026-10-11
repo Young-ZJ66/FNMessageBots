@@ -1,15 +1,27 @@
 """
 推送统计：总条数/成功/失败、当日条数/成功/失败，持久化到 cursor_dir/push_stats.json
+
+与 `utils/push_history.py` 的关系（避免后来者误配）：
+
+- **权威源是 `push_history.db`**：Web 的「推送汇总/统计」读的是它的实时聚合
+  （`web/push_history_service.get_stats`），能按条查明细、按渠道看返回体。
+- **本模块是轻量聚合视图**：只累加成功/失败计数，不含明细；写入时机与
+  `push_history` 相同（都在 `UnifiedNotifier.send_notification` 内），
+  但两者各自独立落盘，异常时可能出现微小偏差。
+- 因此：新增统计需求请走 `push_history`；本文件仅为兼容既有行为与快速查看保留。
+  不要把它的计数当作精确值做对账。
 """
 
 import json
 import os
+import tempfile
 import threading
 import copy
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
-from zoneinfo import ZoneInfo
+
+from utils.logtime_display import get_display_timezone, local_tzinfo
 
 _lock = threading.Lock()
 _stats_path: str = ""
@@ -46,17 +58,29 @@ def _load() -> Dict[str, Any]:
 
 
 def _save(data: Dict[str, Any]) -> None:
+    """原子写入：先写同目录临时文件再 replace，避免进程被杀/磁盘写满时把统计文件写坏后清零。"""
     if not _stats_path:
         return
+    tmp_path = ""
     try:
-        with open(_stats_path, "w", encoding="utf-8") as f:
+        directory = os.path.dirname(_stats_path) or "."
+        fd, tmp_path = tempfile.mkstemp(prefix=".push_stats.", suffix=".tmp", dir=directory)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, _stats_path)
+        tmp_path = ""
     except Exception:
-        pass
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def _today_key() -> str:
-    return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+    return datetime.now(get_display_timezone() or local_tzinfo()).strftime("%Y-%m-%d")
 
 
 def record(success: bool) -> None:

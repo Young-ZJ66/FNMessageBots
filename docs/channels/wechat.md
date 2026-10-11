@@ -23,13 +23,3 @@
 在这里可以添加你自定义的机器人，添加完成后，点击保存，会返回到上一个页面。这个时候就能看看到Webhok地址了。将这个地址复制下来，保存留用。
 
 <span style="color: #c62828;"><strong>注意：官网也说了，这个Webhok地址一定要保密，避免其他人给你推送无用消息。</strong></span>
-
-## 捐赠
-
-创作不易，为了项目的稳定和可持续发展，欢迎大家捐赠支持
-<table>
-  <tr>
-    <td><img src="../../assets/icons/wechat_pay.jpg" width="300" alt="图1说明" /></td>
-    <td><img src="../../assets/icons/ali_pay.jpg" width="300" alt="图2说明" /></td>
-  </tr>
-</table>

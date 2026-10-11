@@ -45,7 +45,7 @@ EVENT_CATEGORIES = [
     ]),
     ("vm_media", "影视库", [
         "MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT", "MEDIA_USER_CREATED",
-        "TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS",
+        "TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED",
     ]),
     ("vm_photo", "相册", [
         "PHOTO_SHARE_CREATED",

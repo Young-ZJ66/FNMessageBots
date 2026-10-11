@@ -25,24 +25,17 @@ if [ ! -f "docker-compose.yml" ]; then
     exit 1
 fi
 
-# 检查 docker-compose.yml 文件中的配置
-if grep -q "your_actual_webhook_key_here\|your_webhook_key" docker-compose.yml; then
-    echo "错误: 请先编辑 docker-compose.yml 文件，配置你的企业微信机器人 Webhook 地址"
-    echo "请将 docker-compose.yml 文件中的 WECHAT_WEBHOOK_URL 替换为实际值"
-    exit 1
-fi
+# 提示：本仓库的 compose 用 build: .（从源码构建），推送渠道在 Web 配置页里填，
+# 不再需要编辑 docker-compose.yml 里的 webhook 占位符。
+# 若要用预构建镜像（如 GitHub Actions 推到 GHCR 的），把 compose 里的 build: . 换成 image:。
 
 echo "开始部署 FN Message Bot..."
 
-# 构建最新的镜像
-echo "构建最新镜像..."
+# 构建并启动（build 会顺带应用代码变更；不需要单独的 pull：
+# compose 用的是 build: .，没有可拉取的远程镜像）
+echo "构建镜像..."
 docker compose build
 
-# 拉取可能的外部依赖
-echo "拉取最新依赖..."
-docker compose pull
-
-# 启动服务
 echo "启动服务..."
 docker compose up -d
 

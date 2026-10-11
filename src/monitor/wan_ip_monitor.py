@@ -11,9 +11,10 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+from utils.logtime_display import now_for_display
 
 WAN_IP_CHANGED = "WAN_IP_CHANGED"
 WAN_IP_CHECK_INTERVAL_SEC = 600  # 10 分钟
@@ -36,7 +37,7 @@ def _load_state(path: Path) -> dict:
     }
     try:
         if path.exists():
-            raw = path.read_text().strip()
+            raw = path.read_text(encoding="utf-8").strip()
             if raw:
                 obj = json.loads(raw)
                 if isinstance(obj, dict):
@@ -49,7 +50,7 @@ def _load_state(path: Path) -> dict:
 def _save_state(path: Path, state: dict) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state, ensure_ascii=False))
+        path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     except Exception as e:
         logging.getLogger(__name__).warning("写入外网 IP 状态失败: %s", e)
 
@@ -164,7 +165,7 @@ def check_and_notify_wan_ip_change(
         "wan_ip": current,
         "previous_wan_ip": last,
         "check_source": source,
-        "changed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "changed_at": now_for_display(),
     }
     raw_log = json.dumps(event_data, ensure_ascii=False)
     ts = event_data["changed_at"]

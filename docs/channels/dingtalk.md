@@ -27,13 +27,3 @@
 正是项目打开后的页面，滑动到最下面，可以看到“事件标题前缀”，自定义关键字一定要和这个保持一致，否则无法接受到消息
 自定义关键字添加完成后，点击完成，就能获取到webHook了
 ![创建机器人步骤 1](images/ding-step10.png)
-
-## 捐赠
-
-创作不易，为了项目的稳定和可持续发展，欢迎大家捐赠支持
-<table>
-  <tr>
-    <td><img src="../../assets/icons/wechat_pay.jpg" width="300" alt="图1说明" /></td>
-    <td><img src="../../assets/icons/ali_pay.jpg" width="300" alt="图2说明" /></td>
-  </tr>
-</table>

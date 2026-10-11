@@ -1,5 +1,5 @@
 """
-企业微信应用、通用 Webhook、MeoW 渠道的参数解析与校验（配置加载、Web 保存、发送共用）。
+通用 Webhook、MeoW 渠道的参数解析与校验（配置加载、Web 保存、发送共用）。
 """
 
 from __future__ import annotations
@@ -8,7 +8,6 @@ import json
 import urllib.parse
 from typing import Any, Dict, Optional, Tuple
 
-WECOM_API_BASE_DEFAULT = "https://qyapi.weixin.qq.com"
 MEOW_API_BASE_DEFAULT = "https://api.chuckfang.com"
 
 WEBHOOK_METHODS = ("POST", "GET", "PUT")
@@ -35,37 +34,6 @@ def parse_json_object(raw: str, label: str) -> Tuple[Optional[Dict[str, Any]], s
     if not isinstance(obj, dict):
         return None, f"{label}配置须为 JSON 对象。"
     return obj, ""
-
-
-# ---------- 企业微信应用 ----------
-
-def wecom_app_fields(obj: Dict[str, Any]) -> Dict[str, Any]:
-    base = str(obj.get("api_base") or "").strip().rstrip("/") or WECOM_API_BASE_DEFAULT
-    to_user = str(obj.get("to_user") or "").strip()
-    to_party = str(obj.get("to_party") or "").strip()
-    to_tag = str(obj.get("to_tag") or "").strip()
-    if not (to_user or to_party or to_tag):
-        to_user = "@all"
-    return {
-        "corp_id": str(obj.get("corp_id") or "").strip(),
-        "corp_secret": str(obj.get("corp_secret") or "").strip(),
-        "agent_id": str(obj.get("agent_id") or "").strip(),
-        "to_user": to_user,
-        "to_party": to_party,
-        "to_tag": to_tag,
-        "api_base": base,
-    }
-
-
-def validate_wecom_app(obj: Dict[str, Any]) -> str:
-    f = wecom_app_fields(obj)
-    if not f["corp_id"] or not f["corp_secret"] or not f["agent_id"]:
-        return "企业微信应用须填写企业ID、应用Secret 和 AgentId。"
-    if not f["agent_id"].isdigit():
-        return "企业微信应用 AgentId 须为数字。"
-    if not _is_http_url(f["api_base"]):
-        return "企业微信应用 API 地址须为 http(s) 地址。"
-    return ""
 
 
 # ---------- MeoW ----------
@@ -177,11 +145,11 @@ def validate_webhook(obj: Dict[str, Any]) -> str:
 
 
 def validate_channel_json(ch_type: str, raw: str) -> str:
-    """校验 wecom_app / webhook / meow 的单条 JSON 配置，返回错误说明（空串表示通过）。"""
-    label = {"wecom_app": "企业微信应用", "webhook": "通用 Webhook", "meow": "MeoW"}[ch_type]
+    """校验 webhook / meow 的单条 JSON 配置，返回错误说明（空串表示通过）。"""
+    label = {"webhook": "通用 Webhook", "meow": "MeoW"}[ch_type]
     obj, err = parse_json_object(raw, label)
     if err:
         return err
     assert obj is not None
-    validator = {"wecom_app": validate_wecom_app, "webhook": validate_webhook, "meow": validate_meow}[ch_type]
+    validator = {"webhook": validate_webhook, "meow": validate_meow}[ch_type]
     return validator(obj)

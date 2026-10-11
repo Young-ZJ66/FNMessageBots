@@ -13,12 +13,12 @@
 | 钉钉 | 群机器人 Webhook | [钉钉](channels/dingtalk.md) |
 | 飞书 | 群机器人 Webhook | [飞书](channels/feishu.md) |
 | Bark | iOS 推送（HTTP API） | [Bark](channels/bark.md) |
-| 魔法推送 | 推送聚合 | [魔法推送](channels/magicpush.md) |
 | SMTP 邮件 | 邮箱通知 | [SMTP 邮件](channels/email.md) |
 | PushPlus | 微信模板消息等 | [官方消息接口文档](https://www.pushplus.plus/doc/guide/api.html) |
-| 企业微信应用 | 自建应用消息，可推送到指定成员 / 部门 / 标签 | [企业微信应用](channels/wecom-app.md) |
 | 通用 Webhook | 自定义 HTTP 请求，对接任意平台 | [通用 Webhook](channels/webhook.md) |
 | MeoW | 手机推送 App，填昵称即可 | [MeoW](channels/meow.md) |
+
+> 本项目只保留**个人可自助开通**的常用渠道。若需对接其它平台（Telegram、ntfy、自建推送服务等），用「通用 Webhook」即可。
 
 ## 按渠道打开文档
 
@@ -26,10 +26,8 @@
 - [钉钉](channels/dingtalk.md)
 - [飞书](channels/feishu.md)
 - [Bark](channels/bark.md)
-- [魔法推送](channels/magicpush.md)
 - [SMTP 邮件](channels/email.md)
 - [PushPlus 官方消息接口文档](https://www.pushplus.plus/doc/guide/api.html)
-- [企业微信应用](channels/wecom-app.md)
 - [通用 Webhook](channels/webhook.md)
 - [MeoW](channels/meow.md)
 
@@ -42,20 +40,9 @@
 | `FEISHU_WEBHOOK_URL` | 飞书 |
 | `BARK_URL` | Bark |
 | `SMTP_PARAMS` | SMTP 邮件（`smtp_params`） |
-| `WECOM_APP_PARAMS` | 企业微信应用（`wecom_app_params`） |
 | `WEBHOOK_PARAMS` | 通用 Webhook（`webhook_params`） |
 | `MEOW_PARAMS` | MeoW（`meow_params`） |
 
 **PushPlus**：在 Web 或 `config.json` 中配置 `pushplus_params`，值为包含 `token` 的 JSON 字符串；多个渠道可用 `|` 分隔，例如 `{"token":"xxx"}|{"token":"yyy"}`。接口与参数说明见 [PushPlus 消息接口文档](https://www.pushplus.plus/doc/guide/api.html)
 
 **SMTP 邮件**：在 Web 或 `config.json` 中配置 `smtp_params`，或通过环境变量 `SMTP_PARAMS` 覆盖；值为 SMTP 参数的 JSON 字符串，多套可用 `|` 分隔。字段与常见邮箱示例见 [SMTP 邮件](channels/email.md)。
-
-## 捐赠
-
-创作不易，为了项目的稳定和可持续发展，欢迎大家捐赠支持
-<table>
-  <tr>
-    <td><img src="images/wechat_pay.jpg" width="300" alt="图1说明" /></td>
-    <td><img src="images/ali_pay.jpg" width="300" alt="图2说明" /></td>
-  </tr>
-</table>

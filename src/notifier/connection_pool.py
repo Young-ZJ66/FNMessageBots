@@ -5,6 +5,7 @@ HTTP连接池管理
 import logging
 import re
 import threading
+import urllib.parse
 from typing import Dict, Any, Optional, Mapping
 from dataclasses import dataclass
 
@@ -13,6 +14,51 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 _QUERY_RE = re.compile(r"\?[^\s'\")]*")
+
+# URL 中需要脱敏的部分：
+# - 查询参数名像凭据（webhook key / access_token / corpsecret / sign ...）
+# - 路径段本身像密钥（如 /api/push/{token} 这类把令牌放路径的接口、Bark device key 等）
+_URL_SECRET_QUERY_KEYS = frozenset({
+    "key", "access_token", "token", "secret", "sign", "corpsecret", "password", "apikey", "api_key",
+})
+_URL_SECRET_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_\-]{16,}$")
+SECRET_MASK = "***"
+
+
+def safe_url_for_log(url: str) -> str:
+    """日志/接口输出用的 URL 脱敏：隐藏查询串与「像密钥」的路径段，避免 token 落日志。
+
+    典型场景：令牌直接放在路径里的接口（如 /api/push/{token}），仅剥离查询串不够。
+    """
+    raw = str(url or "")
+    if not raw:
+        return raw
+    try:
+        parts = urllib.parse.urlsplit(raw)
+    except ValueError:
+        return raw.split("?", 1)[0]
+    netloc = parts.netloc
+    if "@" in netloc:
+        # 去掉 user:password@
+        netloc = netloc.rsplit("@", 1)[1]
+    path = "/".join(
+        (SECRET_MASK if _URL_SECRET_SEGMENT_RE.match(seg) else seg)
+        for seg in parts.path.split("/")
+    )
+    if not parts.query:
+        query = ""
+    else:
+        pairs = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+        query = urllib.parse.urlencode(
+            [
+                (k, SECRET_MASK if k.lower() in _URL_SECRET_QUERY_KEYS else v)
+                for k, v in pairs
+            ],
+            # 保持掩码字符原样（默认会编码成 %2A%2A%2A，可读性差）
+            quote_via=urllib.parse.quote,
+            safe="*",
+        )
+    return urllib.parse.urlunsplit((parts.scheme, netloc, path, query, ""))
 
 @dataclass
 class PoolStats:
@@ -117,8 +163,8 @@ class ConnectionPool:
     
     @staticmethod
     def _safe_url(url: str) -> str:
-        """日志用：去掉查询串（常含 webhook key / access_token / corpsecret）。"""
-        return str(url or "").split("?", 1)[0]
+        """日志用：脱敏查询串与「像密钥」的路径段（webhook key / access_token / 魔法推送 token）。"""
+        return safe_url_for_log(url)
 
     def post(
         self,

@@ -197,7 +197,7 @@
         <section class="faq-list">
           <article class="faq-item">
             <h2>1. 渠道说明</h2>
-            <p>查看：<a href="https://github.com/Sunanang/FNMessageBots/blob/main/docs/notification-channels.md" target="_blank" rel="noopener noreferrer">notification-channels.md</a></p>
+            <p>查看：<a href="{{ docs_url }}" target="_blank" rel="noopener noreferrer">notification-channels.md</a></p>
           </article>
 
           <article class="faq-item">
@@ -243,8 +243,8 @@ Docker 镜像名称：<code>fn-message-bots</code>
           </article>
 
           <article class="faq-item">
-            <h2>8. 联系作者</h2>
-            <p>前往 <a href="support">支持作者</a> 页面查看联系方式与支持信息。</p>
+            <h2>8. 遇到问题 / 想提需求</h2>
+            <p>请到项目仓库提交 <a href="{{ repo_url }}/issues" target="_blank" rel="noopener noreferrer">Issue</a>。为便于定位，麻烦附上：启动日志里的 <code>[schema 自检]</code> 行、<code>docker compose logs</code> 中的报错、以及相关事件的原始日志（配置页可查看推送记录）。</p>
           </article>
 
           <article class="faq-item">
@@ -335,15 +335,19 @@ sudo -u FnMessageBot test -r /var/run/docker.sock -a -w /var/run/docker.sock &am
           </article>
 
           <article class="faq-item">
-            <h2>14. 企业微信应用推送失败，提示 60020 / 可信 IP</h2>
-            <p>企业微信自建应用要求调用方 IP 在「企业可信IP」白名单内。请在企业微信管理后台「应用管理 → 你的自建应用 → 企业可信IP」中填入 NAS 访问外网的出口公网 IP（可在 NAS 上访问 <code>https://ip.3322.net</code> 查看）。
-家庭宽带公网 IP 经常变化时，建议在有固定 IP 的服务器上搭建反向代理（转发到 <code>https://qyapi.weixin.qq.com</code>），并把该服务器 IP 加入可信 IP，然后在本应用渠道配置的「API 地址」中填写代理地址。
-若只需群内通知，也可改用「企业微信」群机器人 Webhook，它不受可信 IP 限制。</p>
+            <h2>14. 升级后「魔法推送」「企业微信应用」渠道不见了，原配置还在吗</h2>
+            <p>这两个渠道已从本项目中移除，<strong>只保留个人可自助开通的常用渠道</strong>（企业微信/钉钉/飞书群机器人、Bark、PushPlus、SMTP 邮件、通用 Webhook、MeoW）。</p>
+            <p><strong>你原来的配置不会被删除</strong>，会一直留在 <code>config.json</code> 里；程序启动时会忽略它们并在日志中提示一行，不会报错。想清理的话手动删掉 <code>magic_push_params</code> / <code>wecom_app_params</code> 两个键即可。</p>
+            <p>若仍需这两个渠道：</p>
+            <ul>
+              <li><strong>魔法推送</strong>：它本质是 HTTP 接口。用「通用 Webhook」填 <code>http://魔法推送地址/api/push/你的Token</code>，请求方式 <code>POST</code>、内容类型 <code>json</code>、请求体 <code>{"title":"{title}","content":"{content}","type":"text"}</code> 即可。</li>
+              <li><strong>企业微信应用</strong>：需企业微信管理员创建自建应用，并受「企业可信IP」限制。若只需群内通知，直接用「企业微信」群机器人 Webhook，不受可信 IP 限制。</li>
+            </ul>
           </article>
         </section>
 
         <footer class="page-footer">
-          © 2024 Sunanang · FnMessageBot · MIT License terms apply.
+          {{ footer_text }}
         </footer>
       </div>
     </div>

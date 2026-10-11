@@ -12,9 +12,8 @@ import threading
 import re
 import smtplib
 import ssl
-import sqlite3
 import os
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
@@ -22,28 +21,17 @@ from email.header import Header
 from email.utils import formataddr
 
 from monitor.sqlite_uri import connect_readonly_with_fallback
-from utils.value_parser import as_bool
 from .channel_params import (
     meow_fields,
     parse_json_object,
     render_webhook_request,
     validate_meow,
     validate_webhook,
-    validate_wecom_app,
-    wecom_app_fields,
 )
-from .connection_pool import ConnectionPool
+from .connection_pool import ConnectionPool, safe_url_for_log
 
-# PushPlus 固定接口地址
-PUSHPLUS_URL = "http://www.pushplus.plus/send"
-
-# 企业微信应用文本消息上限 2048 字节
-WECOM_TEXT_MAX_BYTES = 2000
-# access_token 无效/过期/缺失
-WECOM_TOKEN_INVALID_CODES = frozenset({40001, 40014, 41001, 42001})
-# 进程内共享：热加载重建通知器时不必重新换取 token
-_WECOM_TOKEN_CACHE: Dict[Tuple[str, str, str], Tuple[str, float]] = {}
-_WECOM_TOKEN_LOCK = threading.Lock()
+# PushPlus 固定接口地址（HTTPS：token 与消息正文不再明文传输）
+PUSHPLUS_URL = "https://www.pushplus.plus/send"
 
 # MeoW 返回体 status（HTTP 状态统一为 200）
 MEOW_STATUS_HINTS = {
@@ -75,6 +63,125 @@ DOCKER_CONTAINER_EVENT_TYPES = frozenset({
     "DOCKER_CONTAINER_DESTROY",
 })
 
+# 渠道「不支持富文本」的记忆（进程级）：确认过一次格式被拒后，后续直接发纯文本，
+# 避免每条通知都先失败一次——那会把推送记录里的失败数撑起来，掩盖真正需要关注的失败。
+# 进程重启后重新探测一次；平台升级支持富文本时不需要改配置。
+_RICH_TEXT_REJECTED_CHANNELS: Dict[str, str] = {}
+_RICH_TEXT_REJECTED_LOCK = threading.Lock()
+
+# 明确指向「消息格式/类型不被接受」的错误特征；命中才记忆，
+# 避免把超时、鉴权失败、限流等临时问题误判成渠道能力不足。
+#
+# 注意：这里**只按文本特征判断，不按错误码**。各平台错误码会变、且不同接口编码体系不同，
+# 早期版本曾按错误码判断（写入 19021/19024 等），实际钉钉自定义机器人的群消息校验错误
+# 统一返回 errcode=310000 + errmsg 文本，那些编码是错的。文本特征更稳。
+_FORMAT_REJECT_HINTS = (
+    "invalid message type",
+    "invalid msgtype",
+    "invalid msg_type",
+    "unsupported message type",
+    "unsupported msgtype",
+    "not support",           # 如 "message type not support"
+    "message type",
+    "msgtype",
+    "格式",                  # 中文文案：格式不正确 / 不支持的格式
+    "不支持",
+)
+
+# 平台侧「安全设置/鉴权」类错误：回退纯文本同样会失败，因此既不能记忆为
+# 「渠道不支持富文本」，也不该报成「渠道不可用」——要给出指向安全配置的提示。
+# 依据：钉钉自定义机器人群消息校验失败统一返回 errcode=310000，errmsg 为下列文本之一。
+_SECURITY_REJECT_HINTS = (
+    "keywords not in content",     # 消息未包含自定义关键词
+    "sign not match",              # 加签不匹配
+    "invalid timestamp",           # 加签时间戳无效
+    "not in whitelist",            # 来源 IP 不在白名单
+    "keyword",                     # 中文/简写提示兜底
+    "关键词",
+    "签名",
+    "加签",
+    "白名单",
+)
+
+_SECURITY_HINT = (
+    "该错误来自机器人「安全设置」（关键词/加签/IP 白名单），不是消息格式问题；"
+    "请到该机器人安全设置中核对：关键词需出现在消息文本内、或改用加签、或放行本机出口 IP"
+)
+
+
+def _looks_like_security_rejection(error: str) -> bool:
+    """错误信息是否指向机器人安全设置（关键词/加签/IP 白名单）未通过。"""
+    msg = (error or "").strip().lower()
+    if not msg:
+        return False
+    return any(hint in msg for hint in _SECURITY_REJECT_HINTS)
+
+
+def _rejection_text(result: Dict[str, Any]) -> str:
+    """把一次失败结果里可用于判断原因的文本拼起来。
+
+    ConnectionPool 对 HTTP 4xx/5xx 只给出 "HTTP 400"，而「格式不被接受」的线索
+    在返回体里（如 errcode/errmsg、msgtype 等），因此必须一并纳入判断。
+    """
+    parts = [str(result.get("error") or "")]
+    resp = result.get("response")
+    if isinstance(resp, dict):
+        for key in ("errcode", "code", "StatusCode", "errmsg", "msg", "message", "text_preview"):
+            val = resp.get(key)
+            if val not in (None, ""):
+                parts.append(str(val))
+        inner = resp.get("json")
+        if isinstance(inner, dict):
+            for key in ("errcode", "code", "errmsg", "msg", "message"):
+                val = inner.get(key)
+                if val not in (None, ""):
+                    parts.append(str(val))
+    elif resp is not None:
+        parts.append(str(resp))
+    return " ".join(p for p in parts if p)
+
+
+def _looks_like_format_rejection(error: str) -> bool:
+    """错误信息是否指向「渠道不接受该消息格式」（而非安全设置/网络/鉴权/限流问题）。"""
+    msg = (error or "").strip().lower()
+    if not msg:
+        return False
+    # 安全设置类错误：回退纯文本同样会失败，不属于格式问题
+    if _looks_like_security_rejection(msg):
+        return False
+    # 网络类与鉴权类明确排除
+    for transient in (
+        "timeout", "timed out", "connection", "resolve", "dns", "ssl", "tls",
+        "unauthorized", "forbidden", "401", "403", "429", "rate", "limit", "locked", "busy",
+    ):
+        if transient in msg:
+            return False
+    return any(hint in msg for hint in _FORMAT_REJECT_HINTS)
+
+
+def rich_text_rejected_channels() -> Dict[str, str]:
+    """返回已被确认拒绝富文本的渠道（渠道名 → 触发原因），供排障与测试使用。"""
+    with _RICH_TEXT_REJECTED_LOCK:
+        return dict(_RICH_TEXT_REJECTED_CHANNELS)
+
+
+def reset_rich_text_rejected_channels() -> None:
+    """清除记忆（测试或「渠道升级后再试一次」时使用）。"""
+    with _RICH_TEXT_REJECTED_LOCK:
+        _RICH_TEXT_REJECTED_CHANNELS.clear()
+
+
+def _remember_rich_text_rejection(channel: str, reason: str) -> None:
+    with _RICH_TEXT_REJECTED_LOCK:
+        first_time = channel not in _RICH_TEXT_REJECTED_CHANNELS
+        _RICH_TEXT_REJECTED_CHANNELS[channel] = reason
+    if first_time:
+        logging.getLogger(__name__).warning(
+            "%s 不接受结构化消息（%s），后续直接发送纯文本；重启进程可重新探测",
+            channel,
+            reason,
+        )
+
 
 def normalize_disk_io_payload(ed: Dict[str, Any]) -> Tuple[str, str, str, Any]:
     """DISK_IO_ERR：兼容 parameter 内 data.DEV 与顶层 disk/model/serial（与 DiskWakeup 扁平结构一致）。"""
@@ -92,12 +199,140 @@ def normalize_disk_io_payload(ed: Dict[str, Any]) -> Tuple[str, str, str, Any]:
     return dev, model, sn, err_cnt
 
 
+# ── 渠道分发注册表 ────────────────────────────────────────────────────────────
+# 三个发送入口（普通事件 / 合并磁盘事件 / 系统通知）历史上各抄了一份
+# 「if 有参数 → 构造消息 → 发送 → 记录」的链条，加渠道要改三处、极易漏改。
+# 这里集中登记，分发逻辑收敛到 MultiPlatformNotifier._dispatch_channels。
+@dataclass(frozen=True)
+class ChannelSpec:
+    """一个推送渠道的登记信息。
+
+    key:          渠道标识（与 Web 配置页 / active_platforms 一致）
+    label:        日志与结果里的中文名
+    param_attr:   配置属性名；取值空则跳过该渠道
+    sender:       发送方法名（形如 _send_to_xxx，返回 (是否成功, 渠道结果)）
+    uses_bark_message: 该渠道需要「Bark 形态」的消息（标题+正文结构），而非通用消息对象
+    """
+
+    key: str
+    label: str
+    param_attr: str
+    sender: str
+    uses_bark_message: bool = False
+
+
+# 顺序即发送顺序（与历史行为一致）
+CHANNEL_SPECS: Tuple[ChannelSpec, ...] = (
+    ChannelSpec("wechat", "企业微信", "wechat_webhook_url", "_send_to_wechat"),
+    ChannelSpec("dingtalk", "钉钉", "dingtalk_webhook_url", "_send_to_dingtalk"),
+    ChannelSpec("feishu", "飞书", "feishu_webhook_url", "_send_to_feishu"),
+    ChannelSpec("bark", "Bark", "bark_url", "_send_to_bark", uses_bark_message=True),
+    ChannelSpec("pushplus", "PushPlus", "pushplus_params", "_send_to_pushplus", uses_bark_message=True),
+    ChannelSpec("smtp", "SMTP邮件", "smtp_params", "_send_to_smtp"),
+    ChannelSpec("webhook", "通用Webhook", "webhook_params", "_send_to_webhook"),
+    ChannelSpec("meow", "MeoW", "meow_params", "_send_to_meow"),
+)
+
+
+# ── 各渠道消息体上限（官方文档）────────────────────────────────────────────────
+# 企业微信 markdown/markdown_v2：content 最长 4096 字节、必须 utf8
+WECOM_CONTENT_MAX_BYTES = 4096
+# 钉钉 markdown：text 最大 5000 字符；title 有独立上限（官方 64 字符，取保守值）
+DINGTALK_TEXT_MAX_CHARS = 5000
+DINGTALK_TITLE_MAX_CHARS = 64
+# 飞书自定义机器人：请求体不超过 20KB（留 2KB 给 JSON 结构与其它字段）
+FEISHU_BODY_MAX_BYTES = 18 * 1024
+# 截断时预留的余量，避免「正好等于上限」仍被平台侧判超限
+_TRUNCATE_MARGIN = 16
+TRUNCATE_SUFFIX = "…（内容过长已截断）"
+
+
+def _truncate_chars(text: str, max_chars: int, suffix: str = TRUNCATE_SUFFIX) -> str:
+    """按字符数截断（用于钉钉的 5000 字符上限，该限制按字符计）。"""
+    s = str(text or "")
+    if max_chars <= 0:
+        return ""
+    if len(s) <= max_chars:
+        return s
+    keep = max(0, max_chars - len(suffix))
+    return s[:keep] + suffix
+
+
+def _truncate_bytes(text: str, max_bytes: int, suffix: str = TRUNCATE_SUFFIX) -> str:
+    """按 UTF-8 字节数截断（用于企业微信 4096 字节上限），不切坏多字节字符。"""
+    s = str(text or "")
+    if max_bytes <= 0:
+        return ""
+    if len(s.encode("utf-8")) <= max_bytes:
+        return s
+    budget = max(0, max_bytes - len(suffix.encode("utf-8")))
+    raw = s.encode("utf-8")[:budget]
+    return raw.decode("utf-8", errors="ignore") + suffix
+
+
+def _markdown_body_from_plain(text: str) -> str:
+    """把纯文本正文转成 markdown：缩进行转列表项，「键: 值」行也转列表项。
+
+    企业微信群机器人 markdown 不支持缩进对齐（空白会被吃掉、原文会连成一坨），
+    因此统一把有缩进或「键: 值」的行转成 `- ` 列表项；同时为被列表项包裹的续行补两个空格，
+    避免「… 其余 N 条」这类说明行在渲染时被并入上一条。
+    只做行结构与列表标记转换，不改写任何业务文案。
+    """
+    out_lines: List[str] = []
+    prev_is_item = False
+    for raw in str(text or "").split("\n"):
+        stripped = raw.strip()
+        if not stripped:
+            out_lines.append("")
+            prev_is_item = False
+            continue
+        indented = raw[:1] in (" ", "\t")
+        m = re.match(r"^([^:：]{1,24})[:：][ \t]+(\S.*)$", stripped)
+        if m and not m.group(1).strip().startswith(("-", "*", "#")):
+            line = f"- {m.group(1).strip()}: {m.group(2)}"
+            prev_is_item = True
+        elif indented or re.match(r"^\d+[.)]\s+\S", stripped):
+            line = f"  - {stripped}" if prev_is_item else f"- {stripped}"
+            prev_is_item = True
+        else:
+            line = f"  {stripped}" if (prev_is_item and line_needs_continuation(stripped)) else stripped
+            if line == stripped:
+                prev_is_item = False
+        out_lines.append(line)
+    return "\n".join(out_lines).strip("\n")
+
+
+def line_needs_continuation(stripped: str) -> bool:
+    """以省略号开头的说明行在 markdown 里会被并入上一条列表项，需补缩进单独成段。"""
+    return stripped.startswith("…") or stripped.startswith("...")
+
+
+def _feishu_post_content(title: str, body: str, *, max_segments: int = 400) -> Dict[str, Any]:
+    """飞书自定义机器人富文本（msg_type=post）内容。
+
+    post 需要按段落拆分，逐段只放一个文本片段即可保持原文行序与换行；
+    这里是纯结构转换，不做任何文案改写。
+    """
+    paragraphs: List[List[Dict[str, Any]]] = []
+    for raw in str(body or "").split("\n"):
+        if len(paragraphs) >= max_segments:
+            break
+        paragraphs.append([{"tag": "text", "text": raw.strip()}])
+    if not paragraphs:
+        paragraphs = [[{"tag": "text", "text": ""}]]
+    return {
+        "title": (title or "飞牛NAS")[:200],
+        "content": paragraphs,
+    }
+
+
 @dataclass
 class MultiPlatformMessage:
     """多平台消息"""
-    
+
     title: str = ""
     content: str = ""
+    markdown: str = ""
 
     def merged_plain_text(self, *, blank_line_between: bool = False) -> str:
         """标题与正文合并为一段纯文本。正文为空时不追加分隔符，避免极简模式末尾多余空行。"""
@@ -107,32 +342,73 @@ class MultiPlatformMessage:
             return title
         sep = "\n\n" if blank_line_between else "\n"
         return f"{title}{sep}{content_raw}"
-    
+
+    def merged_markdown(self, *, blank_line_between: bool = True) -> str:
+        """标题与正文合并为 markdown；未预渲染时回退为纯文本正文的等价结构。"""
+        title = self.title or ""
+        body = self.markdown if self.markdown.strip() else _markdown_body_from_plain(self.content or "")
+        if not body.strip():
+            return title
+        sep = "\n\n" if blank_line_between else "\n"
+        return f"{title}{sep}{body}"
+
     def to_wechat_format(self) -> Dict[str, Any]:
-        """转换为企业微信格式"""
+        """转换为企业微信格式（纯文本）"""
         return {
             "msgtype": "text",
             "text": {
                 "content": self.merged_plain_text()
             }
         }
-    
+
+    def to_wechat_markdown_format(self) -> Dict[str, Any]:
+        """企业微信群机器人 markdown（msgtype=markdown，content ≤ 4096 字节，按字节截断）。"""
+        content = _truncate_bytes(self.merged_markdown(), WECOM_CONTENT_MAX_BYTES - _TRUNCATE_MARGIN)
+        return {
+            "msgtype": "markdown",
+            "markdown": {"content": content},
+        }
+
     def to_dingtalk_format(self) -> Dict[str, Any]:
-        """转换为钉钉格式"""
+        """转换为钉钉格式（纯文本）"""
         return {
             "msgtype": "text",
             "text": {
                 "content": self.merged_plain_text()
             }
         }
-    
+
+    def to_dingtalk_markdown_format(self) -> Dict[str, Any]:
+        """钉钉自定义机器人 markdown（text ≤ 5000 字符，title 有独立上限）。"""
+        title = _truncate_chars(self.title or "飞牛NAS", DINGTALK_TITLE_MAX_CHARS)
+        body = self.merged_markdown()
+        # text 上限按字符计；标题也会在首屏展示，因此预留「标题 + 换行」的长度
+        budget = DINGTALK_TEXT_MAX_CHARS - _TRUNCATE_MARGIN - len(title) - 1
+        return {
+            "msgtype": "markdown",
+            "markdown": {
+                "title": title,
+                "text": _truncate_chars(body, max(budget, 0)),
+            },
+        }
+
     def to_feishu_format(self) -> Dict[str, Any]:
-        """转换为飞书格式"""
+        """转换为飞书格式（纯文本）"""
         return {
             "msg_type": "text",
             "content": {
                 "text": self.merged_plain_text()
             }
+        }
+
+    def to_feishu_post_format(self) -> Dict[str, Any]:
+        """飞书自定义机器人富文本 post（结构化：标题 + 逐行段落），正文按 20KB 上限截断。"""
+        body = self.markdown if self.markdown.strip() else _markdown_body_from_plain(self.content or "")
+        title = _truncate_chars(self.title or "", 200)
+        body = _truncate_bytes(body, FEISHU_BODY_MAX_BYTES)
+        return {
+            "msg_type": "post",
+            "content": {"post": {"zh_cn": _feishu_post_content(title, body)}},
         }
 
 
@@ -250,6 +526,7 @@ class MultiPlatformNotifier:
         'MEDIA_USER_CREATED': '👤 飞牛NAS-影视库创建用户',
         'TRIM_RESOURCE_ADDED': '📥 飞牛NAS-影视资源入库',
         'TRIM_SCRAPE_SUCCESS': '✅ 飞牛NAS-影视刮削完成',
+        'TRIM_RESOURCE_DELETED': '🗑️ 飞牛NAS-影视资源删除',
         'PHOTO_SHARE_CREATED': '📥 飞牛NAS-相册分享创建',
         'PHOTO_SHARE_EXPIRED': '⏱️ 飞牛NAS-相册分享过期',
         'PHOTO_DEVICE_REGISTERED': '📱 飞牛NAS-相册同步设备',
@@ -356,6 +633,7 @@ class MultiPlatformNotifier:
         'MEDIA_USER_CREATED': '影视库创建用户',
         'TRIM_RESOURCE_ADDED': '影视资源入库',
         'TRIM_SCRAPE_SUCCESS': '影视刮削完成',
+        'TRIM_RESOURCE_DELETED': '影视资源删除',
         'PHOTO_SHARE_CREATED': '相册分享创建',
         'PHOTO_SHARE_EXPIRED': '相册分享过期',
         'PHOTO_DEVICE_REGISTERED': '相册同步设备',
@@ -460,6 +738,7 @@ class MultiPlatformNotifier:
         'MEDIA_USER_CREATED': '影视库管理员创建用户成功。',
         'TRIM_RESOURCE_ADDED': '影视库资源入库成功。',
         'TRIM_SCRAPE_SUCCESS': '影视资源刮削完成。',
+        'TRIM_RESOURCE_DELETED': '影视库资源已被删除。',
         'PHOTO_SHARE_CREATED': '相册库新增了对外分享链接。',
         'PHOTO_SHARE_EXPIRED': '该相册分享已超过有效期。',
         'PHOTO_DEVICE_REGISTERED': '相册库已登记新的同步设备。',
@@ -483,13 +762,13 @@ class MultiPlatformNotifier:
                  bark_url: str = "",
                  bark_icon: str = "",
                  pushplus_params: str = "",
-                 magic_push_params: str = "",
                  smtp_params: str = "",
-                 wecom_app_params: str = "",
                  webhook_params: str = "",
                  meow_params: str = "",
                  title_prefix: str = "",
                  minimal_push_enabled: bool = False,
+                 markdown_enabled: bool = True,
+                 plain_emoji_enabled: bool = False,
                  poll_batch_summary_enabled: bool = False,
                  user_lookup_db_path: str = "",
                  activity_user_lookup_db_path: str = "",
@@ -497,7 +776,9 @@ class MultiPlatformNotifier:
                  dedup_window: int = 300,
                  pool_size: int = 10,
                  retries: int = 3,
-                 timeout: int = 10):
+                 timeout: int = 10,
+                 merged_event_recorder: Optional[Callable[[str, int, bool, List[Dict[str, Any]]], None]] = None,
+                 ):
         """
         初始化通知器
         
@@ -507,25 +788,27 @@ class MultiPlatformNotifier:
             feishu_webhook_url: 飞书Webhook URL
             bark_url: Bark推送URL
             pushplus_params: PushPlus 参数（JSON 字符串，多个用 | 分隔）
-            magic_push_params: 魔法推送（JSON 含 base_url、token、可选 title / use_inbound，多个用 | 分隔）
             smtp_params: SMTP 邮件配置（JSON：server、port、username、password、to，可选 from）
-            wecom_app_params: 企业微信应用（JSON：corp_id、corp_secret、agent_id，可选 to_user/to_party/to_tag/api_base）
             webhook_params: 通用 Webhook（JSON：url，可选 method/content_type/headers/body）
             meow_params: MeoW（JSON：nickname，可选 url/api_base）
             dedup_window: 去重时间窗口（秒）
             pool_size: 连接池大小
             retries: 重试次数
             timeout: 超时时间
+            merged_event_recorder: 合并事件（磁盘唤醒/休眠）真正发出后的回调，
+                (event_type, count, success, channel_results)；用于把合并推送补记入
+                推送统计与推送记录（合并发送发生在定时线程，不在 send_notification 调用栈内）
         """
+        # 日志对象先于合并定时线程建立，避免线程异常分支访问未赋值的 self.logger
+        self.logger = logging.getLogger(__name__)
+        self.merged_event_recorder = merged_event_recorder
         self.wechat_webhook_url = wechat_webhook_url
         self.dingtalk_webhook_url = dingtalk_webhook_url
         self.feishu_webhook_url = feishu_webhook_url
         self.bark_url = bark_url
         self.bark_icon = (bark_icon or "").strip()
         self.pushplus_params = pushplus_params or ""
-        self.magic_push_params = magic_push_params or ""
         self.smtp_params = smtp_params or ""
-        self.wecom_app_params = wecom_app_params or ""
         self.webhook_params = webhook_params or ""
         self.meow_params = meow_params or ""
         # MeoW 对同一 IP 一天内 3 次推送未注册昵称会封禁 IP；命中 404 后本实例内停发，保存配置重建后恢复
@@ -535,6 +818,10 @@ class MultiPlatformNotifier:
         else:
             self.title_prefix = (title_prefix or "").strip()
         self.minimal_push_enabled = bool(minimal_push_enabled)
+        # 结构化消息（企业微信/钉钉 markdown、飞书 post）；不支持时自动回退纯文本
+        self.markdown_enabled = bool(markdown_enabled)
+        # 是否保留推送文案里的装饰性图标（默认不保留）
+        self.plain_emoji_enabled = bool(plain_emoji_enabled)
         self.poll_batch_summary_enabled = bool(poll_batch_summary_enabled)
         self.user_lookup_db_path = (user_lookup_db_path or "").strip()
         self.activity_user_lookup_db_path = (activity_user_lookup_db_path or "").strip()
@@ -575,9 +862,6 @@ class MultiPlatformNotifier:
         # 合并事件定时发送线程
         self._start_merge_timer()
 
-        # 日志
-        self.logger = logging.getLogger(__name__)
-
         platforms = []
         if self.wechat_webhook_url:
             platforms.append('企业微信')
@@ -589,12 +873,8 @@ class MultiPlatformNotifier:
             platforms.append('Bark')
         if self.pushplus_params:
             platforms.append('PushPlus')
-        if self.magic_push_params:
-            platforms.append('魔法推送')
         if self.smtp_params:
             platforms.append('SMTP邮件')
-        if self.wecom_app_params:
-            platforms.append('企业微信应用')
         if self.webhook_params:
             platforms.append('通用Webhook')
         if self.meow_params:
@@ -607,6 +887,30 @@ class MultiPlatformNotifier:
         if self.title_prefix:
             return f"📋 {self.title_prefix}-系统事件: {event_type}"
         return f"📋 系统事件: {event_type}"
+
+    def _markdown_event_title(self, event_type: str) -> str:
+        """结构化消息用的加粗标题（复用 EVENT_TITLES 文案，仅去掉装饰性图标）。"""
+        raw = self.EVENT_TITLES.get(event_type) or self._fallback_event_title(event_type)
+        return f"**{self._clean_text(raw)}**"
+
+    def _clean_text(self, text: str) -> str:
+        """按配置清理展示文本。
+
+        plain_emoji_enabled 默认关闭：推送内容不再带装饰性图标（emoji/ZWJ/变体选择符），
+        标题与正文统一在此处理，避免只有正文被清理、标题仍带图标的不一致。
+
+        仅当原文确实以图标开头时才顺带去掉其后残留的「-」等分隔符，
+        否则会误删「<前缀>-」这类正常文案（如「飞牛NAS-登录成功通知」）。
+        """
+        if not text:
+            return ""
+        raw = str(text)
+        if self.plain_emoji_enabled:
+            return raw
+        cleaned = self._EMOJI_RE.sub("", raw)
+        if cleaned != raw and raw[:1] != cleaned[:1]:
+            cleaned = re.sub(r"^[\s\-·:：]+", "", cleaned)
+        return cleaned.strip() or raw.strip()
 
     def _with_title_prefix(self, title: str) -> str:
         """把标题中的默认「飞牛NAS」替换为配置前缀；前缀留空时去掉「飞牛NAS-」仅保留事件类型部分。"""
@@ -650,9 +954,7 @@ class MultiPlatformNotifier:
                     'feishu': bool(self.feishu_webhook_url),
                     'bark': bool(self.bark_url),
                     'pushplus': bool(self.pushplus_params),
-                    'magic_push': bool(self.magic_push_params),
                     'smtp': bool(self.smtp_params),
-                    'wecom_app': bool(self.wecom_app_params),
                     'webhook': bool(self.webhook_params),
                     'meow': bool(self.meow_params),
                 }
@@ -725,56 +1027,75 @@ class MultiPlatformNotifier:
                 self.EVENT_TITLES.get(event_type, self._fallback_event_title(event_type))
             )
             content = self._build_content(event_type, merged_data, ts, "")
-            message = MultiPlatformMessage(title=title, content=content)
+            message = MultiPlatformMessage(title=self._clean_text(title), content=content)
+        if self._markdown_wanted() and message.content:
+            message.markdown = _markdown_body_from_plain(self._clean_text(message.content))
 
-        results: List[bool] = []
-        channel_results: List[Dict[str, Any]] = []
-        if self.wechat_webhook_url:
-            ok, cr = self._send_to_wechat(message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("合并事件-企业微信: %s", cr)
-        if self.dingtalk_webhook_url:
-            ok, cr = self._send_to_dingtalk(message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("合并事件-钉钉: %s", cr)
-        if self.feishu_webhook_url:
-            ok, cr = self._send_to_feishu(message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("合并事件-飞书: %s", cr)
-        if self.bark_url:
-            bark_message = self._build_bark_message(event_type, merged_data, ts, "")
-            ok, cr = self._send_to_bark(bark_message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("合并事件-Bark: %s", cr)
-        if self.pushplus_params:
-            pushplus_message = self._build_bark_message(event_type, merged_data, ts, "")
-            ok, cr = self._send_to_pushplus(pushplus_message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("合并事件-PushPlus: %s", cr)
-        if self.magic_push_params:
-            magic_message = self._build_bark_message(event_type, merged_data, ts, "")
-            ok, cr = self._send_to_magic_push(magic_message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("合并事件-魔法推送: %s", cr)
-        if self.smtp_params:
-            ok, cr = self._send_to_smtp(message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("合并事件-SMTP邮件: %s", cr)
-        self._send_to_extra_channels(message, results, channel_results)
+        results, channel_results = self._dispatch_channels(
+            message,
+            log_prefix="合并事件",
+            bark_message=(
+                self._build_bark_message(event_type, merged_data, ts, "")
+                if self._needs_bark_message()
+                else None
+            ),
+        )
         if results and any(results):
             self._record_send_result(True)
             self.logger.info(f"合并事件发送成功: {event_type}, 数量: {len(event_list)}")
+            self._notify_merged_event_sent(event_type, len(event_list), True, channel_results)
             return True, channel_results
         self._record_send_result(False)
         self.logger.warning(f"合并事件发送失败: {event_type}, 数量: {len(event_list)}")
+        self._notify_merged_event_sent(event_type, len(event_list), False, channel_results)
         return False, channel_results
+
+    def _needs_bark_message(self) -> bool:
+        """是否有渠道需要 Bark 形态的消息（Bark / PushPlus）；没有就不必构造，避免无谓开销。"""
+        return any(
+            getattr(self, spec.param_attr, "") for spec in CHANNEL_SPECS if spec.uses_bark_message
+        )
+
+    def _dispatch_channels(
+        self,
+        message: MultiPlatformMessage,
+        *,
+        log_prefix: str,
+        bark_message: Optional[MultiPlatformMessage] = None,
+    ) -> Tuple[List[bool], List[Dict[str, Any]]]:
+        """按 CHANNEL_SPECS 依次投递到所有已配置渠道。
+
+        未配置的渠道（param_attr 为空）直接跳过；Bark/PushPlus 需要 Bark 形态的消息，
+        调用方未提供 bark_message 时退化为使用通用消息（系统通知即如此，与历史行为一致）。
+        返回 (各渠道成功标志, 各渠道结果)，与调用方原先各自维护的两个列表等价。
+        """
+        results: List[bool] = []
+        channel_results: List[Dict[str, Any]] = []
+        for spec in CHANNEL_SPECS:
+            if not getattr(self, spec.param_attr, ""):
+                continue
+            target = bark_message if (spec.uses_bark_message and bark_message is not None) else message
+            ok, cr = getattr(self, spec.sender)(target)
+            results.append(ok)
+            channel_results.append(cr)
+            self.logger.debug("%s-%s: %s", log_prefix, spec.label, cr)
+        return results, channel_results
+
+    def _notify_merged_event_sent(
+        self,
+        event_type: str,
+        count: int,
+        success: bool,
+        channel_results: List[Dict[str, Any]],
+    ) -> None:
+        """通知外层把「合并事件已真正发出」补记入统计与推送记录（回调可选，失败不影响推送）。"""
+        cb = getattr(self, "merged_event_recorder", None)
+        if cb is None:
+            return
+        try:
+            cb(event_type, count, success, channel_results)
+        except Exception as e:
+            self.logger.warning("合并事件记录回调失败: %s", e)
     
     def send_notification(self, 
                          event_type: str,
@@ -799,8 +1120,7 @@ class MultiPlatformNotifier:
             if merged_disks:
                 success, crs = self._send_merged_disk_event(event_type, merged_disks, 0)
                 return success, crs
-            ok = self._handle_disk_event(event_type, event_data, raw_log, timestamp)
-            return ok, []
+            return self._handle_disk_event(event_type, event_data, raw_log, timestamp)
         
         # 生成事件指纹（用于去重）。NAS 定时巡检为按计划主动上报，不走日志风暴去重。
         skip_dedup = event_type == "NAS_PATROL_REPORT"
@@ -822,48 +1142,15 @@ class MultiPlatformNotifier:
         # 构建消息
         message = self._build_message(event_type, event_data, timestamp, raw_log)
         
-        results: List[bool] = []
-        channel_results: List[Dict[str, Any]] = []
-        
-        if self.wechat_webhook_url:
-            ok, cr = self._send_to_wechat(message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("企业微信通知发送结果: %s", cr)
-        if self.dingtalk_webhook_url:
-            ok, cr = self._send_to_dingtalk(message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("钉钉通知发送结果: %s", cr)
-        if self.feishu_webhook_url:
-            ok, cr = self._send_to_feishu(message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("飞书通知发送结果: %s", cr)
-        if self.bark_url:
-            bark_message = self._build_bark_message(event_type, event_data, timestamp, raw_log)
-            ok, cr = self._send_to_bark(bark_message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("Bark通知发送结果: %s", cr)
-        if self.pushplus_params:
-            pushplus_message = self._build_bark_message(event_type, event_data, timestamp, raw_log)
-            ok, cr = self._send_to_pushplus(pushplus_message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("PushPlus通知发送结果: %s", cr)
-        if self.magic_push_params:
-            magic_message = self._build_bark_message(event_type, event_data, timestamp, raw_log)
-            ok, cr = self._send_to_magic_push(magic_message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("魔法推送通知发送结果: %s", cr)
-        if self.smtp_params:
-            ok, cr = self._send_to_smtp(message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("SMTP邮件通知发送结果: %s", cr)
-        self._send_to_extra_channels(message, results, channel_results)
+        results, channel_results = self._dispatch_channels(
+            message,
+            log_prefix="通知",
+            bark_message=(
+                self._build_bark_message(event_type, event_data, timestamp, raw_log)
+                if self._needs_bark_message()
+                else None
+            ),
+        )
         
         if results and any(results):  # 至少一个平台发送成功
             if not skip_dedup and event_fingerprint:
@@ -919,8 +1206,15 @@ class MultiPlatformNotifier:
                 out_lines.append(cleaned.lstrip())
         return "\n".join(out_lines)
     
-    def _handle_disk_event(self, event_type: str, event_data: Dict[str, Any], raw_log: str, timestamp: str) -> bool:
-        """处理磁盘事件，将其添加到合并缓存中"""
+    def _handle_disk_event(
+        self, event_type: str, event_data: Dict[str, Any], raw_log: str, timestamp: str
+    ) -> Tuple[bool, List[Dict[str, Any]]]:
+        """处理磁盘事件：仅加入合并缓存，稍后由合并窗口统一发送。
+
+        注意：本方法**不代表已发送**。返回结果带 skipped="deferred" 标记，供上层区分
+        「已入队待合并」与「已投递成功」——否则推送统计/推送记录会把入队误记为成功，
+        而真正发出合并通知时反而不计数。
+        """
         # 获取当前时间窗口
         current_time = time.time()
         current_window = int(current_time / self.merge_window)
@@ -937,9 +1231,16 @@ class MultiPlatformNotifier:
                     self.disk_spindown_cache[current_window] = []
                 self.disk_spindown_cache[current_window].append(event_data.copy())
 
-        # 返回True表示事件已加入合并队列
         self.logger.debug(f"磁盘事件已加入合并队列: {event_type} -> 窗口 {current_window}")
-        return True
+        return True, [
+            {
+                "channel": "磁盘事件合并",
+                "success": True,
+                "response": None,
+                "error": None,
+                "skipped": "deferred",
+            }
+        ]
     
     def _iter_urls(self, raw: str):
         """将配置的URL拆分为列表，支持使用 '|' 分隔配置多个地址。"""
@@ -962,29 +1263,85 @@ class MultiPlatformNotifier:
             "error": last.get("error") or "请求失败",
         }
 
+    def _send_structured_first(
+        self,
+        channel_name: str,
+        urls: List[str],
+        structured_payload: Dict[str, Any],
+        plain_payload: Dict[str, Any],
+    ) -> tuple:
+        """先发结构化（富文本）消息，渠道拒绝时自动回退纯文本的一次发送流程。
+
+        企业微信/钉钉/飞书的差异只在 payload 形态，分发与回退逻辑完全一致，收敛在此处；
+        多 webhook 场景下每个地址都有独立的回退机会，保证不因富文本被拒而丢通知。
+
+        若该渠道此前已被确认拒绝富文本（格式类错误），直接发纯文本，避免每条通知
+        都先失败一次——那会污染推送记录里的失败统计。
+        """
+        if channel_name in rich_text_rejected_channels():
+            results = [self.connection_pool.post(url, plain_payload) for url in urls]
+            return any(r.get("success") for r in results), self._channel_result(channel_name, results)
+
+        results = [self.connection_pool.post(url, structured_payload) for url in urls]
+        if any(r.get("success") for r in results):
+            return True, self._channel_result(channel_name, results)
+
+        failure_errors = [str(r.get("error") or "") for r in results if not r.get("success")]
+        self.logger.warning(
+            "%s 结构化消息发送失败，回退纯文本: %s",
+            channel_name,
+            failure_errors[0] if failure_errors else "未知原因",
+        )
+        failure_reasons = [_rejection_text(r) for r in results if not r.get("success")]
+        if any(_looks_like_security_rejection(t) for t in failure_reasons):
+            # 安全设置没通过：回退纯文本也会同样失败，且不应记忆为「不支持富文本」
+            self.logger.error("%s %s", channel_name, _SECURITY_HINT)
+        elif any(_looks_like_format_rejection(t) for t in failure_reasons):
+            _remember_rich_text_rejection(
+                channel_name, failure_errors[0] or (failure_reasons[0] if failure_reasons else "格式被拒绝")
+            )
+
+        fallback = [self.connection_pool.post(url, plain_payload) for url in urls]
+        ok = any(r.get("success") for r in fallback)
+        # 失败时只报结构化那一轮，避免把「格式被拒」误报成渠道不可用；成功时合并以便记录实际结果
+        merged = results + fallback if ok else results
+        return ok, self._channel_result(channel_name, merged)
+
     def _send_to_wechat(self, message: MultiPlatformMessage) -> tuple:
-        """发送到企业微信。返回 (是否有任一成功, 渠道结果 dict)。"""
-        payload = message.to_wechat_format()
+        """发送到企业微信。优先 markdown（结构化），失败自动回退纯文本。"""
         urls = self._iter_urls(self.wechat_webhook_url)
-        results = [self.connection_pool.post(url, payload) for url in urls]
-        any_ok = any(r.get("success") for r in results)
-        return any_ok, self._channel_result("企业微信", results)
+        if not urls:
+            return False, self._channel_result("企业微信", [])
+        if self.markdown_enabled:
+            return self._send_structured_first(
+                "企业微信", urls, message.to_wechat_markdown_format(), message.to_wechat_format()
+            )
+        results = [self.connection_pool.post(url, message.to_wechat_format()) for url in urls]
+        return any(r.get("success") for r in results), self._channel_result("企业微信", results)
 
     def _send_to_dingtalk(self, message: MultiPlatformMessage) -> tuple:
-        """发送到钉钉。返回 (是否有任一成功, 渠道结果 dict)。"""
-        payload = message.to_dingtalk_format()
+        """发送到钉钉。优先 markdown（结构化），失败自动回退纯文本。"""
         urls = self._iter_urls(self.dingtalk_webhook_url)
-        results = [self.connection_pool.post(url, payload) for url in urls]
-        any_ok = any(r.get("success") for r in results)
-        return any_ok, self._channel_result("钉钉", results)
+        if not urls:
+            return False, self._channel_result("钉钉", [])
+        if self.markdown_enabled:
+            return self._send_structured_first(
+                "钉钉", urls, message.to_dingtalk_markdown_format(), message.to_dingtalk_format()
+            )
+        results = [self.connection_pool.post(url, message.to_dingtalk_format()) for url in urls]
+        return any(r.get("success") for r in results), self._channel_result("钉钉", results)
 
     def _send_to_feishu(self, message: MultiPlatformMessage) -> tuple:
-        """发送到飞书。返回 (是否有任一成功, 渠道结果 dict)。"""
-        payload = message.to_feishu_format()
+        """发送到飞书。优先富文本 post（结构化），失败自动回退纯文本。"""
         urls = self._iter_urls(self.feishu_webhook_url)
-        results = [self.connection_pool.post(url, payload) for url in urls]
-        any_ok = any(r.get("success") for r in results)
-        return any_ok, self._channel_result("飞书", results)
+        if not urls:
+            return False, self._channel_result("飞书", [])
+        if self.markdown_enabled:
+            return self._send_structured_first(
+                "飞书", urls, message.to_feishu_post_format(), message.to_feishu_format()
+            )
+        results = [self.connection_pool.post(url, message.to_feishu_format()) for url in urls]
+        return any(r.get("success") for r in results), self._channel_result("飞书", results)
 
     def _bark_key_from_url(self, raw_url: str) -> str:
         """从 Bark URL 中提取 key（路径最后一段）。"""
@@ -1042,95 +1399,6 @@ class MultiPlatformNotifier:
         any_ok = any(r.get("success") for r in results)
         return any_ok, self._channel_result("PushPlus", results)
 
-    @staticmethod
-    def _magic_push_endpoint(base: str, token: str, use_inbound: bool) -> str:
-        """方式一：token 放路径。未勾选入站走 /api/push，勾选后走 /api/inbound。"""
-        token_q = urllib.parse.quote(token, safe="")
-        path = "inbound" if use_inbound else "push"
-        return f"{base}/api/{path}/{token_q}"
-
-    def _send_to_magic_push(self, message: MultiPlatformMessage) -> tuple:
-        """魔法推送：POST {base}/api/push/{token} 或 /api/inbound/{token}。
-
-        使用官方「方式一」（token 在路径）而非 Bearer 头：飞牛反代域名下，
-        容器经公网回环访问时 Authorization 常被拦成 403；路径令牌与可用 curl 更一致。
-        """
-        param_list = self._iter_urls(self.magic_push_params)
-        if not param_list:
-            return False, {"channel": "魔法推送", "success": False, "response": None, "error": "未配置"}
-        results = []
-        for param_str in param_list:
-            try:
-                cfg = json.loads(param_str)
-                if not isinstance(cfg, dict):
-                    results.append({"success": False, "response": None, "error": "参数须为 JSON 对象"})
-                    continue
-                base = (cfg.get("base_url") or "").strip().rstrip("/")
-                token = (cfg.get("token") or "").strip()
-                if not base or not token:
-                    results.append({"success": False, "response": None, "error": "缺少 base_url 或 token"})
-                    continue
-                if not base.startswith("http"):
-                    results.append({"success": False, "response": None, "error": "base_url 须为 http(s) 地址"})
-                    continue
-                custom_title = (cfg.get("title") or "").strip()
-                if custom_title:
-                    # 用户显式填写标题时：同样应用事件标题前缀（与事件标题一致的体验）
-                    # 若用户已包含前缀则不重复追加。
-                    api_title = custom_title.replace("飞牛NAS", self.title_prefix or "飞牛NAS")
-                    if self.title_prefix and self.title_prefix not in api_title:
-                        api_title = f"{self.title_prefix}-{api_title}"
-                else:
-                    api_title = message.title or ""
-                api_content = (message.content or "").strip()
-                if not api_content and message.title:
-                    api_content = (message.title or "").strip()
-                # content 为必填；type 默认 text（与官方文档一致）
-                if not api_content:
-                    results.append({"success": False, "response": None, "error": "消息内容为空"})
-                    continue
-                payload = {
-                    "title": (api_title or "")[:200],
-                    "content": api_content[:5000],
-                    "type": "text",
-                }
-                use_inbound = as_bool(cfg.get("use_inbound"), False)
-                # 方式一：token 在路径（避免反代剥离/拒绝 Authorization）
-                url = self._magic_push_endpoint(base, token, use_inbound)
-                hdrs = {
-                    # 与可用 curl 对齐；覆盖 session 默认的 charset / FN-Log-Monitor UA
-                    "Content-Type": "application/json",
-                    "Accept": "*/*",
-                    "User-Agent": "curl/8.7.1",
-                }
-                result = self.connection_pool.post(url, payload, headers=hdrs)
-                # 文档：HTTP 200 且 success=true 为成功；部分环境可能 200 但业务失败
-                if result.get("success"):
-                    body = result.get("response")
-                    if isinstance(body, dict) and body.get("success") is False:
-                        msg = str(body.get("message") or "推送失败")[:120]
-                        result = {
-                            "success": False,
-                            "response": body,
-                            "error": msg,
-                        }
-                elif "403" in str(result.get("error") or ""):
-                    # 公网反代域名从 NAS 容器回环常见；建议改局域网 IP:端口
-                    err = str(result.get("error") or "HTTP 403")
-                    result = {
-                        **result,
-                        "error": (
-                            f"{err}（若基础 URL 为反代域名，请改为魔法推送局域网地址"
-                            f"如 http://192.168.x.x:818）"
-                        ),
-                    }
-                results.append(result)
-            except json.JSONDecodeError:
-                results.append({"success": False, "response": None, "error": "参数 JSON 解析失败"})
-            except Exception as e:
-                results.append({"success": False, "response": None, "error": str(e)[:80]})
-        any_ok = any(r.get("success") for r in results)
-        return any_ok, self._channel_result("魔法推送", results)
 
     def _send_to_smtp(self, message: MultiPlatformMessage) -> tuple:
         """发送到 SMTP 邮件。返回 (是否有任一成功, 渠道结果 dict)。"""
@@ -1202,103 +1470,6 @@ class MultiPlatformNotifier:
                 results.append({"success": False, "response": None, "error": str(e)[:120]})
         any_ok = any(r.get("success") for r in results)
         return any_ok, self._channel_result("SMTP邮件", results)
-
-    def _send_to_extra_channels(
-        self,
-        message: MultiPlatformMessage,
-        results: List[bool],
-        channel_results: List[Dict[str, Any]],
-    ) -> None:
-        """企业微信应用、通用 Webhook、MeoW。"""
-        if self.wecom_app_params:
-            ok, cr = self._send_to_wecom_app(message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("企业微信应用发送结果: %s", cr)
-        if self.webhook_params:
-            ok, cr = self._send_to_webhook(message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("通用Webhook发送结果: %s", cr)
-        if self.meow_params:
-            ok, cr = self._send_to_meow(message)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("MeoW发送结果: %s", cr)
-
-    def _wecom_access_token(self, f: Dict[str, Any], force_refresh: bool = False) -> Tuple[str, Dict[str, Any]]:
-        """获取并缓存企业微信应用 access_token；失败返回 ("", 请求结果)。"""
-        key = (f["api_base"], f["corp_id"], hashlib.sha256(f["corp_secret"].encode()).hexdigest())
-        now = time.time()
-        with _WECOM_TOKEN_LOCK:
-            cached = _WECOM_TOKEN_CACHE.get(key)
-            if cached and not force_refresh and cached[1] > now:
-                return cached[0], {"success": True}
-        r = self.connection_pool.request(
-            "GET",
-            f"{f['api_base']}/cgi-bin/gettoken",
-            params={"corpid": f["corp_id"], "corpsecret": f["corp_secret"]},
-        )
-        body = r.get("response") if isinstance(r.get("response"), dict) else {}
-        token = str(body.get("access_token") or "") if r.get("success") else ""
-        if not token:
-            if r.get("success"):
-                r = {"success": False, "response": body, "error": "未返回 access_token"}
-            return "", r
-        expires = int(body.get("expires_in") or 7200)
-        with _WECOM_TOKEN_LOCK:
-            _WECOM_TOKEN_CACHE[key] = (token, now + max(60, expires - 300))
-        return token, r
-
-    def _send_to_wecom_app(self, message: MultiPlatformMessage) -> tuple:
-        """企业微信自建应用消息：gettoken → message/send（文本消息）。"""
-        param_list = self._iter_urls(self.wecom_app_params)
-        if not param_list:
-            return False, {"channel": "企业微信应用", "success": False, "response": None, "error": "未配置"}
-        content = _truncate_utf8(message.merged_plain_text(), WECOM_TEXT_MAX_BYTES)
-        results = []
-        for param_str in param_list:
-            obj, err = parse_json_object(param_str, "企业微信应用")
-            if err or obj is None:
-                results.append({"success": False, "response": None, "error": err})
-                continue
-            err = validate_wecom_app(obj)
-            if err:
-                results.append({"success": False, "response": None, "error": err})
-                continue
-            f = wecom_app_fields(obj)
-            payload = {
-                "touser": f["to_user"],
-                "toparty": f["to_party"],
-                "totag": f["to_tag"],
-                "msgtype": "text",
-                "agentid": int(f["agent_id"]),
-                "text": {"content": content},
-            }
-            result: Dict[str, Any] = {}
-            for attempt in range(2):
-                token, tr = self._wecom_access_token(f, force_refresh=attempt > 0)
-                if not token:
-                    result = tr
-                    break
-                result = self.connection_pool.post(
-                    f"{f['api_base']}/cgi-bin/message/send?access_token={urllib.parse.quote(token, safe='')}",
-                    payload,
-                )
-                body = result.get("response") if isinstance(result.get("response"), dict) else {}
-                # token 失效时消息未投递，刷新后重发一次不会重复
-                if result.get("success") or body.get("errcode") not in WECOM_TOKEN_INVALID_CODES:
-                    break
-            body = result.get("response") if isinstance(result.get("response"), dict) else {}
-            if not result.get("success") and body.get("errcode") == 60020:
-                result = {
-                    **result,
-                    "error": f"{result.get('error')}（需在企业微信后台为该应用配置「企业可信IP」，"
-                    "或在 API 地址中填写可信代理）",
-                }
-            results.append(result)
-        any_ok = any(r.get("success") for r in results)
-        return any_ok, self._channel_result("企业微信应用", results)
 
     def _send_to_webhook(self, message: MultiPlatformMessage) -> tuple:
         """通用 Webhook：按用户配置的方法、请求头、请求体模板发送。"""
@@ -1477,7 +1648,12 @@ class MultiPlatformNotifier:
             else:
                 minute_window = int(time.time() / 60)
                 key = f"{event_type}_{cid}_{minute_window}"
-        elif event_type in ("TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "MEDIA_USER_CREATED"):
+        elif event_type in (
+            "TRIM_RESOURCE_ADDED",
+            "TRIM_SCRAPE_SUCCESS",
+            "TRIM_RESOURCE_DELETED",
+            "MEDIA_USER_CREATED",
+        ):
             gid = str(event_data.get("guid") or "").strip()
             if gid:
                 key = f"{event_type}_{gid}"
@@ -1620,9 +1796,33 @@ class MultiPlatformNotifier:
             title = self._with_title_prefix(
                 self.EVENT_TITLES.get(title_event_type, self._fallback_event_title(title_event_type))
             )
+        title = self._clean_text(title)
         content = self._build_content(event_type, event_data, timestamp, raw_log)
-        
-        return MultiPlatformMessage(title=title, content=content)
+        msg = MultiPlatformMessage(title=title, content=content)
+        if self._markdown_wanted():
+            msg.markdown = self._render_markdown_body(event_type, event_data, timestamp, raw_log)
+        return msg
+
+    def _markdown_wanted(self) -> bool:
+        """是否需要预渲染结构化（markdown）正文。"""
+        return bool(self.markdown_enabled)
+
+    def _render_markdown_body(
+        self,
+        event_type: str,
+        event_data: Dict[str, Any],
+        timestamp: str,
+        raw_log: str,
+    ) -> str:
+        """生成 markdown 正文：复用同一套内容构建器，再做行结构转换。
+
+        不做二次业务渲染，避免主文案与结构化文案出现信息差异。
+        """
+        try:
+            content = self._build_content(event_type, event_data, timestamp, raw_log)
+        except Exception:
+            return ""
+        return _markdown_body_from_plain(self._clean_text(content))
 
     def _disk_minimal_label(self, disk_info: Dict[str, Any]) -> str:
         """单块磁盘在极简推送中的短标识（设备名优先）。"""
@@ -1728,6 +1928,7 @@ class MultiPlatformNotifier:
             "MEDIA_USER_CREATED": "影视库创建用户",
             "TRIM_RESOURCE_ADDED": "影视资源入库",
             "TRIM_SCRAPE_SUCCESS": "影视刮削完成",
+            "TRIM_RESOURCE_DELETED": "影视资源删除",
             "APP_CRASH": "应用崩溃",
             "APP_UPDATE_FAILED": "应用更新失败",
             "BACKUP_TASK_SUCCESS": "备份任务完成",
@@ -1865,7 +2066,9 @@ class MultiPlatformNotifier:
             detail = self._build_wan_ip_changed_content(event_data)
         elif event_type in ('MEDIA_LOGIN_SUCC', 'MEDIA_LOGOUT'):
             detail = self._build_media_login_content(event_data)
-        elif event_type in ('MEDIA_USER_CREATED', 'TRIM_RESOURCE_ADDED', 'TRIM_SCRAPE_SUCCESS'):
+        elif event_type in (
+            'MEDIA_USER_CREATED', 'TRIM_RESOURCE_ADDED', 'TRIM_SCRAPE_SUCCESS', 'TRIM_RESOURCE_DELETED'
+        ):
             detail = self._build_trim_library_content(event_type, event_data)
         elif event_type in (
             'PHOTO_SHARE_CREATED',
@@ -2316,7 +2519,7 @@ class MultiPlatformNotifier:
                 "Movie": "电影",
             }
             lines.append(f"资源类型: {type_map.get(item_type, item_type)}")
-        if event_type in ("TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_ADDED"):
+        if event_type in ("TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_ADDED", "TRIM_RESOURCE_DELETED"):
             if season_number not in (None, "", 0) and episode_number not in (None, "", 0):
                 lines.append(f"集: 第{season_number}季{episode_number}集")
             elif episode_number not in (None, "", 0):
@@ -2823,7 +3026,7 @@ class MultiPlatformNotifier:
                 return [f"外网IP: {old_ip or '?'} → {new_ip or '?'}"]
             return ["外网IP变化"]
 
-        if et in ("TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS"):
+        if et in ("TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED"):
             title = (ed.get("title") or data.get("title") or "").strip()
             item_type = (ed.get("item_type") or data.get("item_type") or "").strip()
             path = (ed.get("path") or data.get("path") or "").strip()
@@ -3321,7 +3524,10 @@ class MultiPlatformNotifier:
                            timestamp: str, raw_log: str) -> MultiPlatformMessage:
         """构建Bark消息。标题通过 URL 单独传，正文不再重复包含标题，避免推送时标题显示两次。"""
         message = self._build_message(event_type, event_data, timestamp, raw_log)
-        return MultiPlatformMessage(title=message.title, content=message.content)
+        # Bark 为纯文本推送（标题 + 正文），不带 markdown，也不保留装饰性图标
+        return MultiPlatformMessage(
+            title=self._clean_text(message.title), content=message.content
+        )
     
     def send_system_notification(self, event_type: str, message: str, additional_info: Optional[Dict[str, Any]] = None):
         """
@@ -3369,46 +3575,11 @@ class MultiPlatformNotifier:
                 self.EVENT_TITLES.get(event_type, self._fallback_event_title(event_type))
             )
             content = self._build_system_content(event_type, event_data, message)
-            multi_msg = MultiPlatformMessage(title=title, content=content)
+            multi_msg = MultiPlatformMessage(title=self._clean_text(title), content=content)
+            if self._markdown_wanted() and content:
+                multi_msg.markdown = _markdown_body_from_plain(self._clean_text(content))
         
-        results: List[bool] = []
-        channel_results: List[Dict[str, Any]] = []
-        if self.wechat_webhook_url:
-            ok, cr = self._send_to_wechat(multi_msg)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("企业微信系统通知: %s", cr)
-        if self.dingtalk_webhook_url:
-            ok, cr = self._send_to_dingtalk(multi_msg)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("钉钉系统通知: %s", cr)
-        if self.feishu_webhook_url:
-            ok, cr = self._send_to_feishu(multi_msg)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("飞书系统通知: %s", cr)
-        if self.bark_url:
-            ok, cr = self._send_to_bark(multi_msg)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("Bark系统通知: %s", cr)
-        if self.pushplus_params:
-            ok, cr = self._send_to_pushplus(multi_msg)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("PushPlus系统通知: %s", cr)
-        if self.magic_push_params:
-            ok, cr = self._send_to_magic_push(multi_msg)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("魔法推送系统通知: %s", cr)
-        if self.smtp_params:
-            ok, cr = self._send_to_smtp(multi_msg)
-            results.append(ok)
-            channel_results.append(cr)
-            self.logger.debug("SMTP邮件系统通知: %s", cr)
-        self._send_to_extra_channels(multi_msg, results, channel_results)
+        results, channel_results = self._dispatch_channels(multi_msg, log_prefix="系统通知")
         success_count = sum(1 for r in results if r)
         fail_count = len(results) - success_count
         any_ok = bool(results and success_count > 0)
@@ -3480,12 +3651,10 @@ class MultiPlatformNotifier:
             'disk_wakeup_cache_size': len(self.disk_wakeup_cache),
             'disk_spindown_cache_size': len(self.disk_spindown_cache),
             'merge_window': self.merge_window,
-            'wechat_webhook_url': self.wechat_webhook_url[:50] + '...' 
-                if len(self.wechat_webhook_url) > 50 else self.wechat_webhook_url,
-            'dingtalk_webhook_url': self.dingtalk_webhook_url[:50] + '...' 
-                if len(self.dingtalk_webhook_url) > 50 else self.dingtalk_webhook_url,
-            'feishu_webhook_url': self.feishu_webhook_url[:50] + '...' 
-                if len(self.feishu_webhook_url) > 50 else self.feishu_webhook_url
+            # 脱敏：原先只截断前 50 字符，而飞书 webhook 的密钥紧随 46 字符前缀，等于泄露密钥
+            'wechat_webhook_url': safe_url_for_log(self.wechat_webhook_url),
+            'dingtalk_webhook_url': safe_url_for_log(self.dingtalk_webhook_url),
+            'feishu_webhook_url': safe_url_for_log(self.feishu_webhook_url),
         }
     
     def close(self):

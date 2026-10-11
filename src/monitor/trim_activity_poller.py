@@ -16,7 +16,9 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .models import JournalEntry
 from .media_db_poller import _ms_to_str
+from .schema_probe import probe as probe_schema
 from .sqlite_uri import connect_readonly_with_fallback
+from utils.dedup_store import DedupStore
 
 _ACTIVITY_EVENTS: Set[str] = {"MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT"}
 
@@ -68,9 +70,19 @@ class TrimActivityPoller:
         self._state_file = self.cursor_dir / "trim_activity_poller_state.json"
         self._dedup_file = self.cursor_dir / "trim_activity_poller_dedup.json"
         self.logger = logging.getLogger(__name__)
+        self._dedup_store = DedupStore(self._dedup_file, _DEDUP_TTL, "trimactivity", self.logger)
         self.cursor_dir.mkdir(parents=True, exist_ok=True)
         self._dedup_seen: Dict[str, int] = {}
         self._open_db_error_count = 0
+
+    @property
+    def _dedup_seen(self) -> Dict[str, int]:
+        """去重缓存以 DedupStore 为唯一事实来源，这里仅做兼容访问。"""
+        return self._dedup_store.seen
+
+    @_dedup_seen.setter
+    def _dedup_seen(self, value: Dict[str, int]) -> None:
+        self._dedup_store.seen = value
 
     def add_handler(self, event_type: str, handler: Callable) -> None:
         self.event_handlers[event_type] = handler
@@ -112,7 +124,7 @@ class TrimActivityPoller:
         }
         try:
             if self._state_file.exists():
-                raw = self._state_file.read_text().strip()
+                raw = self._state_file.read_text(encoding="utf-8").strip()
                 if raw:
                     obj = json.loads(raw)
                     if isinstance(obj, dict):
@@ -129,35 +141,18 @@ class TrimActivityPoller:
             if isinstance(token_status, dict) and len(token_status) > 100000:
                 items = list(token_status.items())[-80000:]
                 state["token_status"] = dict(items)
-            self._state_file.write_text(json.dumps(state, ensure_ascii=False))
+            self._state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             self.logger.warning("写入 trimactivity 轮询状态失败: %s", e)
 
     def _load_dedup(self) -> None:
-        try:
-            if self._dedup_file.exists():
-                obj = json.loads(self._dedup_file.read_text() or "{}")
-                if isinstance(obj, dict):
-                    now = int(time.time())
-                    self._dedup_seen = {
-                        str(k): int(v)
-                        for k, v in obj.items()
-                        if isinstance(v, (int, float)) and int(v) >= now - _DEDUP_TTL
-                    }
-                    return
-        except Exception as e:
-            self.logger.warning("读取 trimactivity 去重缓存失败: %s", e)
-        self._dedup_seen = {}
+        self._dedup_store.load()
 
     def _save_dedup(self) -> None:
-        try:
-            self._dedup_file.write_text(json.dumps(self._dedup_seen, ensure_ascii=False))
-        except Exception as e:
-            self.logger.warning("写入 trimactivity 去重缓存失败: %s", e)
+        self._dedup_store.save()
 
     def _prune_dedup(self) -> None:
-        now = int(time.time())
-        self._dedup_seen = {k: v for k, v in self._dedup_seen.items() if int(v) >= now - _DEDUP_TTL}
+        self._dedup_store.prune()
 
     def _connect(self) -> sqlite3.Connection:
         conn = connect_readonly_with_fallback(
@@ -249,6 +244,8 @@ class TrimActivityPoller:
             self.logger.error("处理 trimactivity 事件失败 %s: %s", event_type, e, exc_info=True)
 
     def _baseline(self, conn: sqlite3.Connection, state: Dict[str, Any]) -> None:
+        # 先做一次 schema 自检：列名与真机不符时查询会静默返回空数据，日志里必须留痕
+        probe_schema(conn, "trim_activity", self.logger, self.db_path)
         row = conn.execute(
             "SELECT COALESCE(MAX(create_time),0), COALESCE(MAX(update_time),0) FROM user_token"
         ).fetchone()

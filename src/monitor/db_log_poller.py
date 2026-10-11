@@ -9,14 +9,13 @@ import logging
 import sqlite3
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 from typing import Callable, Dict, List, Optional, Any, Sequence
 
-from utils.logtime_display import get_logtime_display_offset_seconds
+from utils.logtime_display import format_ts_for_display, get_logtime_display_offset_seconds, now_for_display
 
 from .models import JournalEntry
+from .schema_probe import probe as probe_schema
 from .sqlite_uri import connect_readonly_with_fallback
 from .ssh_journal_poller import should_ignore_loopback_ssh
 
@@ -91,13 +90,13 @@ DB_EVENT_ID_TO_PROJECT: Dict[str, str] = {
 }
 
 def _logtime_to_datetime(logtime: int) -> str:
-    """10 位 Unix 时间戳转 YYYY-MM-DD HH:MM:SS（Asia/Shanghai）。可设 LOGTIME_DISPLAY_OFFSET_SECONDS 修正存库偏差（如 28800=+8h）。"""
+    """10 位 Unix 时间戳转 YYYY-MM-DD HH:MM:SS（DISPLAY_TIMEZONE，默认 Asia/Shanghai）。
+    可设 LOGTIME_DISPLAY_OFFSET_SECONDS 修正存库偏差（如 28800=+8h）。"""
     try:
         ts = int(logtime) + get_logtime_display_offset_seconds()
-        dt = datetime.fromtimestamp(ts, tz=ZoneInfo("Asia/Shanghai"))
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
     except (ValueError, TypeError, OSError):
-        return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+        return now_for_display()
+    return format_ts_for_display(ts)
 
 
 def _parse_parameter(parameter: Optional[str], uname: Optional[str], uid: Optional[int]) -> Dict[str, Any]:
@@ -122,6 +121,24 @@ def _parse_parameter(parameter: Optional[str], uname: Optional[str], uid: Option
     return data
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    """宽松整数转换：非数字、None、空串等一律回落到 default，绝不抛异常。
+
+    库内 loglevel / uid 曾出现非数字（或文本）导致 int() 抛错，进而使整轮轮询
+    中断、游标不推进，该库之后所有日志永久不再推送。此处避免该路径。
+    """
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
 def _row_to_entry(row: Dict[str, Any]) -> JournalEntry:
     """将数据库一行转为 JournalEntry（供现有 event_processor 使用）。"""
     logtime = row.get("logtime") or 0
@@ -133,8 +150,8 @@ def _row_to_entry(row: Dict[str, Any]) -> JournalEntry:
         hostname=str(row.get("serviceId") or "db"),
         syslog_identifier=str(row.get("eventId") or "unknown"),
         message=parameter,
-        priority=int(row.get("loglevel") or 0),
-        pid=int(row.get("uid") or 0),
+        priority=_as_int(row.get("loglevel")),
+        pid=_as_int(row.get("uid")),
         raw_data=parameter,
         original_line=parameter,
     )
@@ -144,6 +161,10 @@ class DBLogPoller:
     """从 logger_data.db3 的 log 表轮询新记录并分发到已注册的事件处理器。"""
 
     BATCH_MAX_ATTEMPTS = 3
+    # 单轮最多读取的行数，避免游标异常落后时整表读入内存
+    FETCH_LIMIT = 2000
+    # 启动时读取 MAX(id) 的尝试次数，全部失败则拒绝启动（宁可不启动，也不重推整库）
+    MAX_ID_ATTEMPTS = 3
 
     def __init__(
         self,
@@ -153,6 +174,8 @@ class DBLogPoller:
         monitor_events: Optional[List[str]] = None,
         media_lib_logger_enabled: bool = False,
         media_lib_service_patterns: Optional[Sequence[str]] = None,
+        max_id_attempts: Optional[int] = None,
+        resume_from_cursor_on_start: bool = False,
     ):
         self.db_path = db_path
         self.cursor_dir = Path(cursor_dir)
@@ -170,6 +193,13 @@ class DBLogPoller:
         self._thread: Optional[threading.Thread] = None
         self._cursor_file = self.cursor_dir / "db_poller_cursor.txt"
         self._batch_fail_count = 0
+        # 启动时 MAX(id) 读取失败的重试次数（默认 MAX_ID_ATTEMPTS）
+        _attempts = _as_int(max_id_attempts, 0)
+        self.max_id_attempts = _attempts if _attempts > 0 else self.MAX_ID_ATTEMPTS
+        # 是否在启动时沿用已保存游标（默认否，保持「只推送启动后新记录」的历史行为）
+        self.resume_from_cursor_on_start = bool(resume_from_cursor_on_start)
+        # schema 自检只做一次
+        self._schema_probed = False
         self.logger = logging.getLogger(__name__)
         self.cursor_dir.mkdir(parents=True, exist_ok=True)
 
@@ -193,6 +223,7 @@ class DBLogPoller:
         db_path: Optional[str] = None,
         media_lib_logger_enabled: Optional[bool] = None,
         media_lib_service_patterns: Optional[Sequence[str]] = None,
+        resume_from_cursor_on_start: Optional[bool] = None,
     ) -> None:
         """热加载时更新监控事件、轮询间隔、数据库路径。"""
         if monitor_events is not None:
@@ -205,6 +236,8 @@ class DBLogPoller:
             self.media_lib_logger_enabled = bool(media_lib_logger_enabled)
         if media_lib_service_patterns is not None:
             self.media_lib_service_patterns = [str(p).strip() for p in media_lib_service_patterns if str(p).strip()]
+        if resume_from_cursor_on_start is not None:
+            self.resume_from_cursor_on_start = bool(resume_from_cursor_on_start)
         self.logger.info("DBLogPoller 配置已更新: events=%s, interval=%s, db=%s", len(self.monitor_events), self.poll_interval, self.db_path)
 
     def _apply_media_library_filter(self, row: Dict[str, Any], project_type: str) -> str:
@@ -222,9 +255,10 @@ class DBLogPoller:
         return project_type
 
     def _read_last_id(self) -> int:
+        """读取上次已处理到的 id（0 表示没有可用游标）。"""
         try:
             if self._cursor_file.exists():
-                raw = self._cursor_file.read_text().strip()
+                raw = self._cursor_file.read_text(encoding="utf-8").strip()
                 if raw.isdigit():
                     return int(raw)
         except Exception as e:
@@ -233,82 +267,135 @@ class DBLogPoller:
 
     def _write_last_id(self, last_id: int) -> None:
         try:
-            self._cursor_file.write_text(str(last_id))
+            self._cursor_file.write_text(str(last_id), encoding="utf-8")
         except Exception as e:
             self.logger.warning("写入游标失败: %s", e)
 
     def _get_max_log_id(self) -> int:
-        """获取 log 表当前最大 id；启动时用此值作为游标，只处理此后新写入的记录。"""
-        try:
-            conn = connect_readonly_with_fallback(self.db_path, timeout=5.0)
-            row = conn.execute("SELECT COALESCE(MAX(id), 0) AS mx FROM log").fetchone()
-            conn.close()
-            return int(row[0]) if row else 0
-        except Exception as e:
-            self.logger.warning("获取 log 表最大 id 失败: %s，将从头轮询", e)
-            return 0
+        """获取 log 表当前最大 id；启动时用此值作为游标，只处理此后新写入的记录。
+
+        读取失败时不再静默返回 0（那会让游标从 0 开始、重推整库），改为重试若干次后
+        抛错并拒绝启动轮询，避免把「查询失败」当成「库是空的」。
+        """
+        last_err: Optional[Exception] = None
+        attempts = max(1, int(self.max_id_attempts or self.MAX_ID_ATTEMPTS))
+        attempt = 0
+        while attempt < attempts:
+            attempt += 1
+            try:
+                conn = connect_readonly_with_fallback(self.db_path, timeout=5.0)
+                try:
+                    row = conn.execute("SELECT COALESCE(MAX(id), 0) AS mx FROM log").fetchone()
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                return _as_int(row[0] if row else 0)
+            except Exception as exc:
+                last_err = exc
+                self.logger.warning(
+                    "获取 log 表最大 id 失败（第 %s/%s 次）: %s", attempt, attempts, exc
+                )
+                if attempt < attempts:
+                    time.sleep(min(2.0 * attempt, 5.0))
+        raise RuntimeError(f"无法读取 log 表最大 id，已放弃启动轮询以避免重推历史: {last_err}")
 
     def _fetch_new_rows(self, after_id: int) -> List[Dict[str, Any]]:
-        """查询 id > after_id 的记录，按 id 升序。"""
+        """查询 id > after_id 的记录，按 id 升序，每轮最多 FETCH_LIMIT 条。
+
+        加 LIMIT 是因为游标一旦异常落后（例如库被替换、MAX(id) 读取失败回退），
+        原实现会把整表一次性读入内存；分批后下一轮会继续处理剩余记录。
+        """
         try:
             conn = connect_readonly_with_fallback(self.db_path, timeout=5.0)
-            conn.row_factory = sqlite3.Row
-            cur = conn.execute(
-                "SELECT id, serviceId, uid, uname, logtime, loglevel, eventId, parameter, category FROM log WHERE id > ? ORDER BY id ASC",
-                (after_id,),
-            )
-            rows = [dict(r) for r in cur.fetchall()]
-            conn.close()
-            return rows
+            try:
+                conn.row_factory = sqlite3.Row
+                cur = conn.execute(
+                    "SELECT id, serviceId, uid, uname, logtime, loglevel, eventId, parameter, category "
+                    "FROM log WHERE id > ? ORDER BY id ASC LIMIT ?",
+                    (after_id, self.FETCH_LIMIT),
+                )
+                return [dict(r) for r in cur.fetchall()]
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         except Exception as e:
             self.logger.error("查询数据库失败: %s", e)
             return []
 
+    def _build_batch_item(self, row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """把一行转为待投递的批次项；该行不需要推送时返回 None。"""
+        row_id = row.get("id", 0)
+        db_event_id = (row.get("eventId") or "").strip()
+        if not db_event_id:
+            return None
+        project_type = DB_EVENT_ID_TO_PROJECT.get(db_event_id, db_event_id)
+        # SshdLoginAuthFail 且 uname=invalid 才是无效用户尝试，按 SSH_INVALID_USER 处理
+        uname_raw = (row.get("uname") or "").strip()
+        if db_event_id == "SshdLoginAuthFail" and uname_raw.lower() == "invalid":
+            project_type = "SSH_INVALID_USER"
+        if self.skip_ssh_events and project_type in {
+            "SSH_LOGIN_SUCCESS",
+            "SSH_AUTH_FAILED",
+            "SSH_INVALID_USER",
+            "SSH_DISCONNECTED",
+        }:
+            return None
+        project_type = self._apply_media_library_filter(row, project_type)
+        if self.monitor_events and project_type not in self.monitor_events:
+            return None
+        handler = self.event_handlers.get(project_type)
+        if not handler:
+            return None
+        event_data = _parse_parameter(
+            row.get("parameter"),
+            row.get("uname"),
+            row.get("uid"),
+        )
+        if self.ignore_ssh_loopback and should_ignore_loopback_ssh(project_type, event_data):
+            return None
+        event_data.setdefault("_source", "logger_db")
+        event_data.setdefault("_source_cursor", str(row_id))
+        event_data.setdefault("_source_event_id", db_event_id)
+        return {
+            "row_id": row_id,
+            "db_event_id": db_event_id,
+            "event_type": project_type,
+            "event_data": event_data,
+            "entry": _row_to_entry(row),
+            "handler": handler,
+        }
+
     def _poll_once(self, last_id: int) -> int:
         rows = self._fetch_new_rows(last_id)
         batch_events: List[Dict[str, Any]] = []
+        # 游标推进到本轮已见的最大 id，而不是「rows[-1]」：单行解析异常时也要越过该行，
+        # 否则同一脏行每轮复现、其后的日志永远不再推送。
+        max_seen_id = last_id
+        skipped = 0
         for row in rows:
-            row_id = row.get("id", 0)
-            db_event_id = (row.get("eventId") or "").strip()
-            if not db_event_id:
+            row_id = _as_int(row.get("id"), max_seen_id)
+            max_seen_id = max(max_seen_id, row_id)
+            try:
+                item = self._build_batch_item(row)
+            except Exception as e:
+                skipped += 1
+                self.logger.error(
+                    "解析/构造事件失败，已跳过该行 id=%s eventId=%s: %s",
+                    row_id,
+                    (row.get("eventId") or "").strip(),
+                    e,
+                    exc_info=True,
+                )
                 continue
-            project_type = DB_EVENT_ID_TO_PROJECT.get(db_event_id, db_event_id)
-            # SshdLoginAuthFail 且 uname=invalid 才是无效用户尝试，按 SSH_INVALID_USER 处理
-            uname_raw = (row.get("uname") or "").strip()
-            if db_event_id == "SshdLoginAuthFail" and uname_raw.lower() == "invalid":
-                project_type = "SSH_INVALID_USER"
-            if self.skip_ssh_events and project_type in {
-                "SSH_LOGIN_SUCCESS",
-                "SSH_AUTH_FAILED",
-                "SSH_INVALID_USER",
-                "SSH_DISCONNECTED",
-            }:
-                continue
-            project_type = self._apply_media_library_filter(row, project_type)
-            if self.monitor_events and project_type not in self.monitor_events:
-                continue
-            handler = self.event_handlers.get(project_type)
-            if not handler:
-                continue
-            event_data = _parse_parameter(
-                row.get("parameter"),
-                row.get("uname"),
-                row.get("uid"),
-            )
-            if self.ignore_ssh_loopback and should_ignore_loopback_ssh(project_type, event_data):
-                continue
-            event_data.setdefault("_source", "logger_db")
-            event_data.setdefault("_source_cursor", str(row_id))
-            event_data.setdefault("_source_event_id", db_event_id)
-            entry = _row_to_entry(row)
-            batch_events.append({
-                "row_id": row_id,
-                "db_event_id": db_event_id,
-                "event_type": project_type,
-                "event_data": event_data,
-                "entry": entry,
-                "handler": handler,
-            })
+            if item is not None:
+                batch_events.append(item)
+        if skipped:
+            self.logger.warning("本轮有 %s 行日志处理失败已跳过（游标继续推进）", skipped)
+
         batch_delivery_failed = False
         if batch_events:
             if self.batch_handler:
@@ -334,19 +421,70 @@ class DBLogPoller:
                     "批量处理连续失败 %s 次，放弃本批（id %s–%s）",
                     self._batch_fail_count,
                     rows[0].get("id"),
-                    rows[-1].get("id"),
+                    max_seen_id,
                 )
             self._batch_fail_count = 0
-            self._write_last_id(rows[-1].get("id", last_id))
-        return last_id if not rows else rows[-1].get("id", last_id)
+            self._write_last_id(max_seen_id)
+        return max_seen_id
+
+    def _align_cursor_on_start(self) -> Optional[int]:
+        """启动时确定游标起点。
+
+        两种模式：
+        - 默认（resume_from_cursor_on_start=False，与历史行为一致）：对齐到当前库最大 id，
+          不补推历史，仅处理启用之后的新增记录；
+        - resume_from_cursor_on_start=True：沿用上次退出时保存的游标，把停机期间产生的记录补推一遍。
+
+        MAX(id) 读不到时**不会**退回 0（那会把整库历史重推一遍），而是记录错误并让上层
+        隔一段时间重试；期间不轮询，宁可晚一点开始，也不制造大量重复通知。
+        """
+        if self.resume_from_cursor_on_start:
+            saved = self._read_last_id()
+            if saved > 0:
+                try:
+                    max_id = self._get_max_log_id()
+                except Exception as e:
+                    self.logger.error("启动读取库水位失败，暂不轮询（将自动重试）: %s", e)
+                    return None
+                if saved <= max_id:
+                    self.logger.info(
+                        "数据库轮询启动：沿用已保存游标 id=%s（补推停机期间记录，当前库最大 id=%s）",
+                        saved,
+                        max_id,
+                    )
+                    return saved
+                self.logger.warning(
+                    "已保存游标 id=%s 大于当前库最大 id=%s（库可能被替换/回滚），改为对齐当前水位",
+                    saved,
+                    max_id,
+                )
+                self._write_last_id(max_id)
+                return max_id
+            self.logger.info("未找到可用游标，按当前水位对齐（不补推历史）")
+
+        try:
+            max_id = self._get_max_log_id()
+        except Exception as e:
+            self.logger.error("启动对齐游标失败，暂不轮询（将自动重试）: %s", e)
+            return None
+        self._write_last_id(max_id)
+        self.logger.info("数据库轮询启动，仅处理 id > %s 的新记录，间隔 %s 秒", max_id, self.poll_interval)
+        return max_id
 
     def _run_loop(self) -> None:
-        # 启动时将游标对齐到当前库最大 id：不补推历史日志，仅从启用轮询这一刻之后的新增记录开始推送
-        last_id = self._get_max_log_id()
-        self._write_last_id(last_id)
-        self.logger.info("数据库轮询启动，仅处理 id > %s 的新记录，间隔 %s 秒", last_id, self.poll_interval)
+        last_id: Optional[int] = None
         while self.running:
+            if last_id is None:
+                last_id = self._align_cursor_on_start()
+                if last_id is None:
+                    # 等待一个轮询周期后重试对齐，避免启动瞬间库被占用导致永久停摆
+                    for _ in range(self.poll_interval):
+                        if not self.running:
+                            return
+                        time.sleep(1)
+                    continue
             try:
+                self._probe_schema_once()
                 last_id = self._poll_once(last_id)
             except Exception as e:
                 self.logger.error("轮询异常: %s", e, exc_info=True)
@@ -354,6 +492,23 @@ class DBLogPoller:
                 if not self.running:
                     return
                 time.sleep(1)
+
+    def _probe_schema_once(self) -> None:
+        """首次成功连接后做一次 schema 自检（列名不符会让查询静默返回空数据）。"""
+        if self._schema_probed:
+            return
+        self._schema_probed = True
+        try:
+            conn = connect_readonly_with_fallback(self.db_path, timeout=5.0)
+            try:
+                probe_schema(conn, "logger", self.logger, self.db_path)
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            self.logger.info("schema 自检跳过（连接失败）: %s", e)
 
     def start(self) -> None:
         if self.running:

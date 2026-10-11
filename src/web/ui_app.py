@@ -39,10 +39,11 @@ from web.api_helpers import build_notifier_from_raw as _build_notifier_from_raw
 from web.api_helpers import parse_success_filter as _parse_success_filter
 from web.app_paths import BASE_DIR
 from web.app_paths import CONFIG_FILE
+from web.app_paths import FOOTER_TEXT
 from web.app_paths import GITHUB_ICON_FILE
 from web.app_paths import ICON_FILE
-from web.app_paths import SUPPORT_QR_DIR
-from web.app_paths import SUPPORT_QR_FILENAMES
+from web.app_paths import PROJECT_DOCS_URL
+from web.app_paths import PROJECT_REPO_URL
 from web.config_store import channels_from_raw as _channels_from_raw
 from web.config_store import config_load_error as _config_load_error
 from web.config_store import load_raw_config as _load_raw_config_from_file
@@ -123,11 +124,12 @@ def _gateway_identity():
 
 def _is_authenticated() -> bool:
     """统一网关的 NAS 管理员、显式关闭鉴权的部署，或持有有效会话。"""
+    # 先判断「显式关闭鉴权」：该判断无副作用（可能打印一次提示），避免每个请求都先解析网关身份
+    if _auth_disabled_by_env():
+        return True
     gw = _gateway_identity()
     if gw is not None:
         return bool(gw["is_admin"])
-    if _auth_disabled_by_env():
-        return True
     return _touch_session(_get_session_id_from_cookie(), SESSION_IDLE_SECONDS)
 
 
@@ -385,6 +387,11 @@ def create_app(on_config_saved=None) -> Flask:
     @app.after_request
     def _no_index(resp):
         resp.headers.setdefault("X-Robots-Tag", "noindex, nofollow, noarchive")
+        # 含配置、webhook 打码值与推送记录的响应不得被浏览器/中间代理缓存
+        path = request.path or ""
+        if path.startswith("/api/") or path in {"/", "/history", "/faq"}:
+            resp.headers.setdefault("Cache-Control", "no-store, no-cache, must-revalidate")
+            resp.headers.setdefault("Pragma", "no-cache")
         return resp
 
     CHANNEL_OPTIONS = [
@@ -393,9 +400,7 @@ def create_app(on_config_saved=None) -> Flask:
         {"id": "feishu", "name": "飞书"},
         {"id": "bark", "name": "Bark"},
         {"id": "pushplus", "name": "PushPlus"},
-        {"id": "magic_push", "name": "魔法推送"},
         {"id": "smtp", "name": "SMTP邮件"},
-        {"id": "wecom_app", "name": "企业微信应用"},
         {"id": "webhook", "name": "通用Webhook"},
         {"id": "meow", "name": "MeoW"},
     ]
@@ -439,8 +444,6 @@ def create_app(on_config_saved=None) -> Flask:
                 "need_setup": not _has_password_set(),
                 "message": "未登录或会话已过期，请重新输入密码。",
             }), 401
-        if path.startswith("/support/img/"):
-            abort(403)
         return redirect(_home_url())
 
     @app.get("/api/auth/status")
@@ -537,7 +540,10 @@ def create_app(on_config_saved=None) -> Flask:
     def get_config():
         raw = _load_raw_config()
 
-        # 迁移：旧版默认多勾了「应用启动/自启动失败、UPS 开启/关闭」或「应用生命周期」时，改为新默认并回写
+        # 迁移：旧版默认多勾了「应用启动/自启动失败、UPS 开启/关闭」或「应用生命周期」时，改为新默认。
+        # 注意：这是**读接口**，只在内存里返回迁移后的勾选状态，不写盘——
+        # 原先在此回写 config.json 会让「打开配置页」产生磁盘副作用（含探测出来的库路径被固化）。
+        # 用户在页面点保存时才会持久化。
         raw_events = raw.get("monitor_events")
         if isinstance(raw_events, list):
             raw_set = set(raw_events)
@@ -546,14 +552,9 @@ def create_app(on_config_saved=None) -> Flask:
             old_default_with_extra = new_default_set | OLD_DEFAULT_SELECTED_EVENTS_WITH_EXTRA
             old_full_default = new_default_set | APP_LIFECYCLE_EVENTS
             if raw_set == old_default_with_extra:
-                raw["monitor_events"] = DEFAULT_SELECTED_EVENTS
-                _save_raw_config(raw)
                 monitor_events = DEFAULT_SELECTED_EVENTS
             elif raw_set == old_full_default:
-                filtered = [e for e in raw_events if e not in APP_LIFECYCLE_EVENTS]
-                raw["monitor_events"] = filtered
-                _save_raw_config(raw)
-                monitor_events = filtered
+                monitor_events = [e for e in raw_events if e not in APP_LIFECYCLE_EVENTS]
             else:
                 monitor_events = raw_events
         else:
@@ -590,11 +591,14 @@ def create_app(on_config_saved=None) -> Flask:
             "bark_icon": (raw.get("bark_icon") or "").strip(),
             "log_retention_days": int(raw.get("log_retention_days", raw.get("max_log_age", 7))),
             "logger_poll_interval": int(raw.get("logger_poll_interval", 3)),
+            "resume_from_cursor_on_start": as_bool(raw.get("resume_from_cursor_on_start", False), False),
             "dnd_enabled": as_bool(raw.get("dnd_enabled", False), False),
             "dnd_start_time": (raw.get("dnd_start_time") or "22:00").strip(),
             "dnd_end_time": (raw.get("dnd_end_time") or "07:00").strip(),
             "poll_batch_summary_enabled": as_bool(raw.get("poll_batch_summary_enabled", False), False),
             "minimal_push_enabled": as_bool(raw.get("minimal_push_enabled", False), False),
+            "push_markdown_enabled": as_bool(raw.get("push_markdown_enabled", True), True),
+            "push_emoji_enabled": as_bool(raw.get("push_emoji_enabled", False), False),
             "ssh_ignore_loopback": as_bool(raw.get("ssh_ignore_loopback", False), False),
             "nas_patrol_enabled": as_bool(raw.get("nas_patrol_enabled", False), False),
             "nas_patrol_cron": _cron,
@@ -618,11 +622,14 @@ def create_app(on_config_saved=None) -> Flask:
             return jsonify({"ok": False, "message": restore_err}), 400
         log_retention_days = payload.get("log_retention_days", 7)
         logger_poll_interval = payload.get("logger_poll_interval", 3)
+        resume_from_cursor_on_start = as_bool(payload.get("resume_from_cursor_on_start", False), False)
         dnd_enabled = as_bool(payload.get("dnd_enabled", False), False)
         dnd_start_time = (payload.get("dnd_start_time") or "22:00").strip()
         dnd_end_time = (payload.get("dnd_end_time") or "07:00").strip()
         poll_batch_summary_enabled = as_bool(payload.get("poll_batch_summary_enabled", False), False)
         minimal_push_enabled = as_bool(payload.get("minimal_push_enabled", False), False)
+        push_markdown_enabled = as_bool(payload.get("push_markdown_enabled", True), True)
+        push_emoji_enabled = as_bool(payload.get("push_emoji_enabled", False), False)
         ssh_ignore_loopback = as_bool(payload.get("ssh_ignore_loopback", False), False)
         nas_patrol_enabled = as_bool(payload.get("nas_patrol_enabled", False), False)
         nas_patrol_cron = (payload.get("nas_patrol_cron") or "").strip()
@@ -670,7 +677,7 @@ def create_app(on_config_saved=None) -> Flask:
                 return jsonify({"ok": False, "message": "存在未知的推送渠道类型。"}), 400
             if not url:
                 return jsonify({"ok": False, "message": "推送渠道地址不能为空。"}), 400
-            if ch_type in ("wecom_app", "webhook", "meow"):
+            if ch_type in ("webhook", "meow"):
                 parts = []
                 for part in (p.strip() for p in url.split("|") if p.strip()):
                     err = validate_channel_json(ch_type, part)
@@ -686,19 +693,6 @@ def create_app(on_config_saved=None) -> Flask:
                         return jsonify({"ok": False, "message": "PushPlus 参数必须是包含 token 的 JSON 对象。"}), 400
                 except json.JSONDecodeError as e:
                     return jsonify({"ok": False, "message": f"PushPlus 参数不是合法 JSON：{e}"}), 400
-            elif ch_type == "magic_push":
-                try:
-                    obj = json.loads(url)
-                    if not isinstance(obj, dict):
-                        return jsonify({"ok": False, "message": "魔法推送配置须为 JSON 对象。"}), 400
-                    base = (obj.get("base_url") or "").strip()
-                    token = (obj.get("token") or "").strip()
-                    if not base or not token:
-                        return jsonify({"ok": False, "message": "魔法推送须填写基础 URL 与 Token。"}), 400
-                    if not base.startswith("http"):
-                        return jsonify({"ok": False, "message": "魔法推送基础 URL 须为 http(s) 地址。"}), 400
-                except json.JSONDecodeError as e:
-                    return jsonify({"ok": False, "message": f"魔法推送配置不是合法 JSON：{e}"}), 400
             elif ch_type == "smtp":
                 try:
                     obj = json.loads(url)
@@ -748,11 +742,14 @@ def create_app(on_config_saved=None) -> Flask:
                 "monitor_events": events,
                 "log_retention_days": log_retention_days,
                 "logger_poll_interval": logger_poll_interval,
+                "resume_from_cursor_on_start": resume_from_cursor_on_start,
                 "dnd_enabled": dnd_enabled,
                 "dnd_start_time": dnd_start_time,
                 "dnd_end_time": dnd_end_time,
                 "poll_batch_summary_enabled": poll_batch_summary_enabled,
                 "minimal_push_enabled": minimal_push_enabled,
+                "push_markdown_enabled": push_markdown_enabled,
+                "push_emoji_enabled": push_emoji_enabled,
                 "ssh_ignore_loopback": ssh_ignore_loopback,
                 "nas_patrol_enabled": nas_patrol_enabled,
                 "nas_patrol_cron": nas_patrol_cron,
@@ -816,7 +813,7 @@ def create_app(on_config_saved=None) -> Flask:
                     "message": "测试消息已发送，请检查各渠道是否收到。",
                     "channel_results": channel_results or [],
                 })
-            # 拼出各渠道失败原因，便于排查魔法推送等自建服务
+            # 拼出各渠道失败原因，便于排查自建服务（如通用 Webhook 目标）
             fail_bits = []
             if isinstance(channel_results, list):
                 for cr in channel_results:
@@ -905,45 +902,18 @@ def create_app(on_config_saved=None) -> Flask:
     @app.get("/history")
     def history_page():
         """推送记录二级页：列表 + 筛选 + 加载更多 + 查看详情。"""
-        return render_template("history.html", favicon_url=favicon_url)
-
-    @app.get("/support/img/<path:name>")
-    def support_qr(name: str):
-        """支持作者页收款码（仅允许白名单文件名）。"""
-        safe = Path(name).name
-        if safe not in SUPPORT_QR_FILENAMES:
-            abort(404)
-        if not SUPPORT_QR_DIR.is_dir():
-            abort(404)
-        target = SUPPORT_QR_DIR / safe
-        if not target.is_file():
-            abort(404)
-        return send_from_directory(str(SUPPORT_QR_DIR), safe)
-
-    @app.get("/support")
-    def support_page():
-        """支持作者：展示 README 中与捐赠说明一致的收款二维码。"""
-        wechat_src = (
-            "support/img/wechat_pay.jpg"
-            if SUPPORT_QR_DIR.is_dir() and (SUPPORT_QR_DIR / "wechat_pay.jpg").is_file()
-            else ""
-        )
-        ali_src = (
-            "support/img/ali_pay.jpg"
-            if SUPPORT_QR_DIR.is_dir() and (SUPPORT_QR_DIR / "ali_pay.jpg").is_file()
-            else ""
-        )
-        return render_template(
-            "support.html",
-            favicon_url=favicon_url,
-            wechat_src=wechat_src,
-            ali_src=ali_src,
-        )
+        return render_template("history.html", favicon_url=favicon_url, footer_text=FOOTER_TEXT)
 
     @app.get("/faq")
     def faq_page():
         """常见问题页。"""
-        return render_template("faq.html", favicon_url=favicon_url)
+        return render_template(
+            "faq.html",
+            favicon_url=favicon_url,
+            repo_url=PROJECT_REPO_URL,
+            docs_url=PROJECT_DOCS_URL,
+            footer_text=FOOTER_TEXT,
+        )
 
     @app.get("/")
     def index():
@@ -953,6 +923,9 @@ def create_app(on_config_saved=None) -> Flask:
             icon_url=icon_url,
             favicon_url=favicon_url,
             github_icon_url=github_icon_url,
+            repo_url=PROJECT_REPO_URL,
+            docs_url=PROJECT_DOCS_URL,
+            footer_text=FOOTER_TEXT,
         )
 
 

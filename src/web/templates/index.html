@@ -675,9 +675,6 @@
       border-color: #1d4ed8;
       color: #fff;
     }
-    html[data-theme="dark"] .magic-push-inbound-label {
-      color: #d1d5db;
-    }
     html[data-theme="dark"] .stats-block {
       background: #0f172a;
       border-color: #374151;
@@ -830,7 +827,7 @@
         <div id="auth-login-msg" class="auth-msg"></div>
       </div>
     </div>
-    <p class="license-footer">© 2024 Sunanang · FnMessageBot · MIT License terms apply.</p>
+    <p class="license-footer">{{ footer_text }}</p>
   </div>
   <div id="app-main" class="page" style="display:none;">
     <div class="card">
@@ -913,7 +910,7 @@
         </div>
         <div class="field-helper" style="margin-top: 10px;">
           渠道配置教程：
-          <a href="https://github.com/Sunanang/FNMessageBots/blob/main/docs/notification-channels.md" target="_blank" rel="noopener noreferrer">
+          <a href="{{ docs_url }}" target="_blank" rel="noopener noreferrer">
             推送渠道配置教程
           </a>
         </div>
@@ -935,6 +932,13 @@
             <div class="field-helper">轮询日志数据库的间隔时间，过小会增加磁盘 IO。</div>
           </div>
           <div>
+            <div class="field-label" style="display: flex; align-items: center; gap: 8px;">
+              <input type="checkbox" id="input-resume-from-cursor" />
+              <span>重启后补推停机期间日志</span>
+            </div>
+            <div class="field-helper">默认关闭：启动时对齐当前库水位，只推送启动之后的新记录。开启后沿用上次保存的游标，把停机期间写入的日志补推一遍（短期重启不想漏事件时使用）。</div>
+          </div>
+          <div>
             <div class="field-label">事件标题前缀</div>
             <input id="input-title-prefix" type="text" placeholder="飞牛NAS" />
             <div class="field-helper">默认「飞牛NAS」，内容为空则无前缀。</div>
@@ -952,6 +956,20 @@
               <span>极简推送</span>
             </div>
             <div class="field-helper">开启后推送消息将压缩为一行显示，仅展示关键信息</div>
+          </div>
+          <div>
+            <div class="field-label" style="display: flex; align-items: center; gap: 8px;">
+              <input type="checkbox" id="input-push-markdown-enabled" />
+              <span>结构化消息</span>
+            </div>
+            <div class="field-helper">企业微信与钉钉使用 markdown、飞书使用富文本，按行分条展示；Bark、PushPlus、SMTP、通用 Webhook 等不支持富文本的渠道仍发纯文本。渠道不支持时会自动回退纯文本，不影响送达。</div>
+          </div>
+          <div>
+            <div class="field-label" style="display: flex; align-items: center; gap: 8px;">
+              <input type="checkbox" id="input-push-emoji-enabled" />
+              <span>推送文案保留图标</span>
+            </div>
+            <div class="field-helper">默认关闭：推送标题与正文不显示 emoji 等装饰性图标，保持文案简洁。</div>
           </div>
           <div>
             <div class="field-label" style="display: flex; align-items: center; gap: 8px;">
@@ -1016,16 +1034,14 @@
       </div>
 
       <div class="home-footer">
-        <a class="footer-link" href="https://github.com/Sunanang/FNMessageBots" target="_blank" rel="noopener noreferrer">
+        <a class="footer-link" href="{{ repo_url }}" target="_blank" rel="noopener noreferrer">
           <img class="footer-github-icon" src="{{ github_icon_url }}" alt="" width="18" height="18" decoding="async" />
           开源地址
         </a>
         <span class="footer-sep" aria-hidden="true">·</span>
-        <a class="footer-link" href="support">支持作者</a>
-        <span class="footer-sep" aria-hidden="true">·</span>
         <a class="footer-link" href="faq">常见问题</a>
       </div>
-      <p class="license-footer">© 2024 Sunanang · FnMessageBot · MIT License terms apply.</p>
+      <p class="license-footer">{{ footer_text }}</p>
     </div>
   </div>
   <div id="toast-container" class="toast-container"></div>
@@ -1295,20 +1311,6 @@
       });
     }
 
-    function serializeMagicPushFromInputs(wrap) {
-      if (!wrap) return "";
-      const base = (wrap.querySelector(".magic-push-base") && wrap.querySelector(".magic-push-base").value || "").trim();
-      const token = (wrap.querySelector(".magic-push-token") && wrap.querySelector(".magic-push-token").value || "").trim();
-      const titleEl = wrap.querySelector(".magic-push-title");
-      const title = titleEl ? titleEl.value.trim() : "";
-      const inboundEl = wrap.querySelector(".magic-push-inbound");
-      if (!base || !token) return "";
-      const o = { base_url: base, token: token };
-      if (title) o.title = title;
-      if (inboundEl && inboundEl.checked) o.use_inbound = true;
-      return JSON.stringify(o);
-    }
-
     // 多条渠道配置以 | 拼接保存，JSON 字符串内的 | 需转义
     function stringifyChannelJson(o) {
       return JSON.stringify(o).replace(/\|/g, "\\u007c");
@@ -1366,27 +1368,6 @@
       return { el: det, body: body };
     }
 
-    function serializeWecomAppFromInputs(wrap) {
-      if (!wrap) return "";
-      const o = {
-        corp_id: fieldValue(wrap, "wecom-corp-id"),
-        corp_secret: fieldValue(wrap, "wecom-corp-secret"),
-        agent_id: fieldValue(wrap, "wecom-agent-id"),
-      };
-      if (!o.corp_id || !o.corp_secret || !o.agent_id) return "";
-      const optional = {
-        to_user: "wecom-to-user",
-        to_party: "wecom-to-party",
-        to_tag: "wecom-to-tag",
-        api_base: "wecom-api-base",
-      };
-      Object.keys(optional).forEach(function (k) {
-        const v = fieldValue(wrap, optional[k]);
-        if (v) o[k] = v;
-      });
-      return stringifyChannelJson(o);
-    }
-
     function serializeWebhookFromInputs(wrap) {
       if (!wrap) return "";
       const url = fieldValue(wrap, "webhook-url");
@@ -1402,45 +1383,6 @@
       if (headers) o.headers = headers;
       if (body) o.body = body;
       return stringifyChannelJson(o);
-    }
-
-    function buildWecomAppWidget(val) {
-      const o = parseChannelJson(val);
-      const wrap = document.createElement("div");
-      wrap.className = "wecom-app-fields";
-      wrap.style.display = "flex";
-      wrap.style.flexDirection = "column";
-      wrap.style.gap = "8px";
-      wrap.style.width = "100%";
-      const grid = document.createElement("div");
-      grid.style.display = "grid";
-      grid.style.gridTemplateColumns = "repeat(3, minmax(140px, 1fr))";
-      grid.style.gap = "8px";
-      grid.appendChild(makeChannelInput("wecom-corp-id", "企业ID（corpid）", o.corp_id));
-      grid.appendChild(makeChannelInput("wecom-corp-secret", "应用 Secret", o.corp_secret, "password"));
-      grid.appendChild(makeChannelInput("wecom-agent-id", "AgentId", o.agent_id));
-      wrap.appendChild(grid);
-      const adv = makeAdvancedFold(o.to_user || o.to_party || o.to_tag || o.api_base);
-      const advGrid = document.createElement("div");
-      advGrid.style.display = "grid";
-      advGrid.style.gridTemplateColumns = "repeat(3, minmax(140px, 1fr))";
-      advGrid.style.gap = "8px";
-      advGrid.appendChild(makeChannelInput("wecom-to-user", "接收成员（默认 @all 全员，多个用 | 分隔）", o.to_user));
-      advGrid.appendChild(makeChannelInput("wecom-to-party", "接收部门ID", o.to_party));
-      advGrid.appendChild(makeChannelInput("wecom-to-tag", "接收标签ID", o.to_tag));
-      adv.body.appendChild(advGrid);
-      const base = makeChannelInput(
-        "wecom-api-base",
-        "API 地址（默认 https://qyapi.weixin.qq.com；无固定公网 IP 时可填可信代理地址）",
-        o.api_base
-      );
-      base.style.width = "100%";
-      adv.body.appendChild(base);
-      wrap.appendChild(adv.el);
-      wrap.appendChild(makeChannelHelper(
-        "默认推送给应用可见范围内的全部成员。若返回 60020，需在应用详情配置「企业可信IP」（填 NAS 出口公网 IP）。"
-      ));
-      return wrap;
     }
 
     function buildWebhookWidget(val) {
@@ -1547,16 +1489,9 @@
           const ta = tdUrl.querySelector("textarea");
           return ta ? ta.value.trim() : "";
         }
-        if (rowChannelType === "magic_push") {
-          const wrap = tdUrl.querySelector(".magic-push-fields");
-          return serializeMagicPushFromInputs(wrap);
-        }
         if (rowChannelType === "smtp") {
           const wrap = tdUrl.querySelector(".smtp-fields");
           return serializeSmtpFromInputs(wrap);
-        }
-        if (rowChannelType === "wecom_app") {
-          return serializeWecomAppFromInputs(tdUrl.querySelector(".wecom-app-fields"));
         }
         if (rowChannelType === "webhook") {
           return serializeWebhookFromInputs(tdUrl.querySelector(".webhook-fields"));
@@ -1582,77 +1517,6 @@
           ta.value = val || "";
           ta.style.minHeight = "60px";
           tdUrl.appendChild(ta);
-        } else if (type === "magic_push") {
-          let base = "", token = "", title = "", useInbound = false;
-          if (val) {
-            try {
-              const o = JSON.parse(val);
-              if (o && typeof o === "object") {
-                base = (o.base_url || "").trim();
-                token = (o.token || "").trim();
-                title = (o.title || "").trim();
-                useInbound = o.use_inbound === true || o.use_inbound === "true" || o.use_inbound === 1;
-              }
-            } catch (e) { /* ignore */ }
-          }
-          const wrap = document.createElement("div");
-          wrap.className = "magic-push-fields";
-          wrap.style.display = "flex";
-          wrap.style.flexDirection = "column";
-          wrap.style.gap = "8px";
-          wrap.style.width = "100%";
-          const inBase = document.createElement("input");
-          inBase.type = "text";
-          inBase.className = "magic-push-base channel-url-input";
-          inBase.placeholder = "基础 URL（如 https://magicpush.landos.fnos.net）如果是内网请使用ip+端口（如 http://192.168.x.x:818）";
-          inBase.value = base;
-          inBase.style.width = "100%";
-          const row2 = document.createElement("div");
-          row2.className = "magic-push-row2";
-          row2.style.display = "flex";
-          row2.style.flexDirection = "row";
-          row2.style.flexWrap = "wrap";
-          row2.style.alignItems = "center";
-          row2.style.gap = "8px";
-          row2.style.width = "100%";
-          const inTok = document.createElement("input");
-          inTok.type = "text";
-          inTok.className = "magic-push-token";
-          inTok.placeholder = "Token";
-          inTok.autocomplete = "off";
-          inTok.value = token;
-          inTok.style.flex = "1 1 120px";
-          inTok.style.minWidth = "100px";
-          const inTitle = document.createElement("input");
-          inTitle.type = "text";
-          inTitle.className = "magic-push-title";
-          inTitle.placeholder = "标题（留空则使用事件标题）";
-          inTitle.value = title;
-          inTitle.style.flex = "1 1 160px";
-          inTitle.style.minWidth = "120px";
-          const inboundRow = document.createElement("label");
-          inboundRow.className = "magic-push-inbound-label";
-          inboundRow.style.display = "flex";
-          inboundRow.style.alignItems = "flex-start";
-          inboundRow.style.gap = "8px";
-          inboundRow.style.fontSize = "13px";
-          inboundRow.style.color = "#374151";
-          inboundRow.style.cursor = "pointer";
-          const inInbound = document.createElement("input");
-          inInbound.type = "checkbox";
-          inInbound.className = "magic-push-inbound";
-          inInbound.checked = useInbound;
-          inInbound.style.marginTop = "2px";
-          const inboundText = document.createElement("span");
-          inboundText.innerHTML = "使用入站配置（<code>/api/inbound</code>）。需先在魔法推送开启入站并映射 <code>$.title</code> / <code>$.content</code>；未勾选走默认 <code>/api/push</code>。";
-          inboundRow.appendChild(inInbound);
-          inboundRow.appendChild(inboundText);
-          wrap.appendChild(inBase);
-          row2.appendChild(inTok);
-          row2.appendChild(inTitle);
-          wrap.appendChild(row2);
-          wrap.appendChild(inboundRow);
-          tdUrl.appendChild(wrap);
         } else if (type === "smtp") {
           let server = "", port = "", username = "", password = "", fromAddr = "", toAddr = "";
           if (val) {
@@ -1711,8 +1575,6 @@
           wrap.appendChild(inFrom);
           wrap.appendChild(inTo);
           tdUrl.appendChild(wrap);
-        } else if (type === "wecom_app") {
-          tdUrl.appendChild(buildWecomAppWidget(val));
         } else if (type === "webhook") {
           tdUrl.appendChild(buildWebhookWidget(val));
         } else if (type === "meow") {
@@ -1922,8 +1784,11 @@
 
         document.getElementById("input-log-days").value = data.log_retention_days || 7;
         document.getElementById("input-poll-interval").value = data.logger_poll_interval || 5;
+        document.getElementById("input-resume-from-cursor").checked = !!data.resume_from_cursor_on_start;
         document.getElementById("input-poll-batch-summary").checked = !!data.poll_batch_summary_enabled;
         document.getElementById("input-minimal-push-enabled").checked = !!data.minimal_push_enabled;
+        document.getElementById("input-push-markdown-enabled").checked = data.push_markdown_enabled !== false;
+        document.getElementById("input-push-emoji-enabled").checked = !!data.push_emoji_enabled;
         document.getElementById("input-ssh-ignore-loopback").checked = !!data.ssh_ignore_loopback;
         document.getElementById("input-title-prefix").value =
           typeof data.title_prefix === "string" ? data.title_prefix : "飞牛NAS";
@@ -2000,16 +1865,9 @@
         if (!sel) return;
         const type = sel.value;
         let url = "";
-        if (type === "magic_push") {
-          const wrap = tr.querySelector(".magic-push-fields");
-          url = serializeMagicPushFromInputs(wrap);
-          if (!url) return;
-        } else if (type === "smtp") {
+        if (type === "smtp") {
           const wrap = tr.querySelector(".smtp-fields");
           url = serializeSmtpFromInputs(wrap);
-          if (!url) return;
-        } else if (type === "wecom_app") {
-          url = serializeWecomAppFromInputs(tr.querySelector(".wecom-app-fields"));
           if (!url) return;
         } else if (type === "webhook") {
           url = serializeWebhookFromInputs(tr.querySelector(".webhook-fields"));
@@ -2040,9 +1898,12 @@
         channels,
         log_retention_days: document.getElementById("input-log-days").value,
         logger_poll_interval: document.getElementById("input-poll-interval").value,
+        resume_from_cursor_on_start: document.getElementById("input-resume-from-cursor").checked,
         title_prefix: (document.getElementById("input-title-prefix").value || "").trim(),
         poll_batch_summary_enabled: document.getElementById("input-poll-batch-summary").checked,
         minimal_push_enabled: document.getElementById("input-minimal-push-enabled").checked,
+        push_markdown_enabled: document.getElementById("input-push-markdown-enabled").checked,
+        push_emoji_enabled: document.getElementById("input-push-emoji-enabled").checked,
         ssh_ignore_loopback: document.getElementById("input-ssh-ignore-loopback").checked,
         dnd_enabled: document.getElementById("input-dnd-enabled").checked,
         dnd_start_time: document.getElementById("input-dnd-start").value || "22:00",

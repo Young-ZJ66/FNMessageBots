@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .models import JournalEntry
+from .schema_probe import probe as probe_schema
 from .sqlite_uri import connect_readonly_with_fallback
+from utils.dedup_store import DedupStore
+from utils.logtime_display import get_display_timezone, now_for_display
 
 
 SCHEDULER_TASK_SUCCESS_EVENT = "SCHEDULER_TASK_SUCCESS"
@@ -93,7 +96,9 @@ def _iso_to_display(iso_str: Optional[str]) -> str:
         except ValueError:
             continue
         if dt.tzinfo is not None:
-            dt = dt.astimezone()
+            # 带时区值换算到统一展示时区（DISPLAY_TIMEZONE，默认 Asia/Shanghai）
+            disp_tz = get_display_timezone()
+            dt = dt.astimezone(disp_tz) if disp_tz is not None else dt.astimezone()
         return dt.strftime("%Y-%m-%d %H:%M:%S")
     return s
 
@@ -138,10 +143,19 @@ class SchedulerDBPoller:
         self._cursor_file = self.cursor_dir / "scheduler_db_poller_cursor.json"
         self._dedup_file = self.cursor_dir / "scheduler_db_poller_dedup.json"
         self.logger = logging.getLogger(__name__)
+        self._dedup_store = DedupStore(self._dedup_file, SCHEDULER_DEDUP_TTL_SECONDS, "任务计划", self.logger)
         self.cursor_dir.mkdir(parents=True, exist_ok=True)
-        self._dedup_seen: Dict[str, int] = {}
         self.poll_batch_summary_enabled = False
         self.summary_batch_enqueue: Optional[Callable[[List[Dict[str, Any]]], None]] = None
+
+    @property
+    def _dedup_seen(self) -> Dict[str, int]:
+        """去重缓存以 DedupStore 为唯一事实来源，这里仅做兼容访问。"""
+        return self._dedup_store.seen
+
+    @_dedup_seen.setter
+    def _dedup_seen(self, value: Dict[str, int]) -> None:
+        self._dedup_store.seen = value
 
     def add_handler(self, event_type: str, handler: Callable) -> None:
         self.event_handlers[event_type] = handler
@@ -176,7 +190,7 @@ class SchedulerDBPoller:
         default: Dict[str, Any] = {"last_finished_at": "", "last_id": 0}
         try:
             if self._cursor_file.exists():
-                obj = json.loads(self._cursor_file.read_text() or "{}")
+                obj = json.loads(self._cursor_file.read_text(encoding="utf-8") or "{}")
                 if isinstance(obj, dict):
                     return {
                         "last_finished_at": str(obj.get("last_finished_at") or ""),
@@ -189,40 +203,20 @@ class SchedulerDBPoller:
     def _write_cursor(self, last_finished_at: str, last_id: int) -> None:
         try:
             payload = {"last_finished_at": last_finished_at, "last_id": int(last_id or 0)}
-            self._cursor_file.write_text(json.dumps(payload, ensure_ascii=False))
+            self._cursor_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             self.logger.warning("写入任务计划游标失败: %s", e)
 
     # ── 去重缓存 ───────────────────────────────────────────────────────────────
 
     def _load_dedup(self) -> None:
-        try:
-            if self._dedup_file.exists():
-                obj = json.loads(self._dedup_file.read_text() or "{}")
-                if isinstance(obj, dict):
-                    now = int(time.time())
-                    self._dedup_seen = {
-                        str(k): int(v)
-                        for k, v in obj.items()
-                        if isinstance(v, (int, float)) and int(v) >= now - SCHEDULER_DEDUP_TTL_SECONDS
-                    }
-                    return
-        except Exception as e:
-            self.logger.warning("读取任务计划去重缓存失败: %s", e)
-        self._dedup_seen = {}
+        self._dedup_store.load()
 
     def _save_dedup(self) -> None:
-        try:
-            self._dedup_file.write_text(json.dumps(self._dedup_seen, ensure_ascii=False))
-        except Exception as e:
-            self.logger.warning("写入任务计划去重缓存失败: %s", e)
+        self._dedup_store.save()
 
     def _prune_dedup(self) -> None:
-        now = int(time.time())
-        cutoff = now - SCHEDULER_DEDUP_TTL_SECONDS
-        self._dedup_seen = {k: v for k, v in self._dedup_seen.items() if v >= cutoff}
-
-    # ── 数据库 ─────────────────────────────────────────────────────────────────
+        self._dedup_store.prune()
 
     def _connect(self) -> sqlite3.Connection:
         conn = connect_readonly_with_fallback(self.db_path, timeout=5.0)
@@ -241,6 +235,8 @@ class SchedulerDBPoller:
         """
         try:
             conn = self._connect()
+            # schema 自检只在首次调用时实际执行（内部去重）
+            probe_schema(conn, "scheduler", self.logger, self.db_path)
             row = conn.execute(sql).fetchone()
             conn.close()
             if not row:
@@ -330,7 +326,7 @@ class SchedulerDBPoller:
             "_source_event_id": event_type,
         }
 
-        timestamp = _iso_to_display(finished_at_str) or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = _iso_to_display(finished_at_str) or now_for_display()
         entry = JournalEntry(
             cursor=str(row.get("id") or ""),
             timestamp=timestamp,

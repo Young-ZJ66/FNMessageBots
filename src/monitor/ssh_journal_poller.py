@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .models import JournalEntry
+from utils.logtime_display import format_ts_for_display, now_for_display
 
 SSH_LOGIN_SUCCESS = "SSH_LOGIN_SUCCESS"
 SSH_AUTH_FAILED = "SSH_AUTH_FAILED"
@@ -234,7 +235,7 @@ class SshJournalPoller:
         default = {"version": 1, "cursor": "", "aligned": False}
         try:
             if self._state_file.exists():
-                obj = json.loads(self._state_file.read_text() or "{}")
+                obj = json.loads(self._state_file.read_text(encoding="utf-8") or "{}")
                 if isinstance(obj, dict):
                     default.update(obj)
         except Exception as e:
@@ -243,7 +244,7 @@ class SshJournalPoller:
 
     def _save_state(self, state: Dict[str, Any]) -> None:
         try:
-            self._state_file.write_text(json.dumps(state, ensure_ascii=False))
+            self._state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             self.logger.warning("写入 SSH journal 状态失败: %s", e)
 
@@ -328,18 +329,10 @@ class SshJournalPoller:
         raw = obj.get("__REALTIME_TIMESTAMP")
         try:
             # 微秒
-            us = int(raw)
-            sec = us / 1_000_000.0
-            try:
-                from zoneinfo import ZoneInfo
-
-                return datetime.fromtimestamp(sec, tz=ZoneInfo("Asia/Shanghai")).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-            except Exception:
-                return datetime.fromtimestamp(sec).strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            sec = int(raw) / 1_000_000.0
+        except (TypeError, ValueError):
+            return now_for_display()
+        return format_ts_for_display(sec)
 
     def _emit(self, event_type: str, event_data: Dict[str, Any], raw_msg: str, ts: str) -> None:
         if self.monitor_events and event_type not in self.monitor_events:

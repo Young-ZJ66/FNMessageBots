@@ -12,11 +12,11 @@ import os
 import re
 import stat as stat_mod
 import socket
+import sqlite3
 import subprocess
 import threading
 import time
 import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 import ipaddress
@@ -29,6 +29,7 @@ except ImportError:
     psutil = None  # type: ignore
 
 from .sqlite_uri import connect_readonly_with_fallback
+from utils.logtime_display import format_ts_for_display, now_for_display
 
 _STATE_FILENAME = "nas_patrol_state.json"
 
@@ -183,7 +184,7 @@ def _cpu_disk_temp_c() -> Tuple[str, str]:
     if disk_t == "—":
         for hw in ("/sys/class/hwmon/hwmon1/temp1_input", "/sys/class/hwmon/hwmon0/temp1_input"):
             try:
-                v = int(open(hw, "r", encoding="utf-8").read().strip())
+                v = int(Path(hw).read_text(encoding="utf-8").strip())
                 disk_t = f"{v / 1000.0:.1f}"
                 break
             except Exception:
@@ -343,7 +344,7 @@ def _fmt_uptime(sec: float) -> str:
 
 def _fmt_boot_time(ts: float) -> str:
     try:
-        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+        return format_ts_for_display(ts)
     except Exception:
         return "--"
 
@@ -2982,7 +2983,7 @@ def _send_patrol_notification(
     except Exception as e:
         if logger:
             logger.warning("巡检触发外网 IP 检测失败: %s", e)
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ts = now_for_display()
     raw_log = json.dumps(payload, ensure_ascii=False)
     try:
         result = app.notifier.send_notification(
@@ -3136,7 +3137,7 @@ def nas_patrol_worker_loop(app: Any) -> None:
                         else:
                             nxt = next_cron_timestamp(cron_expr, now)
                         wait_min = max(0.0, (nxt - now) / 60.0)
-                        nxt_str = datetime.fromtimestamp(nxt).strftime("%Y-%m-%d %H:%M:%S")
+                        nxt_str = format_ts_for_display(nxt)
                     except Exception as e:
                         wait_min = 0.0
                         nxt_str = f"（计算失败: {e}）"
@@ -3160,7 +3161,7 @@ def nas_patrol_worker_loop(app: Any) -> None:
             if last_success > now + 60:
                 msg = (
                     "NAS 巡检状态异常：last_success_ts 在未来（"
-                    f"{datetime.fromtimestamp(last_success).strftime('%Y-%m-%d %H:%M:%S')}），"
+                    f"{format_ts_for_display(last_success)}），"
                     "已重置为当前时间"
                 )
                 log.warning(msg)
@@ -3194,7 +3195,7 @@ def nas_patrol_worker_loop(app: Any) -> None:
                     sleep_s = min(sleep_s, float(interval_s))
                 # 下次触发时间不变只记一次
                 if abs(due_at - _last_wait_due) > 1:
-                    nxt_str = datetime.fromtimestamp(due_at).strftime("%Y-%m-%d %H:%M:%S")
+                    nxt_str = format_ts_for_display(due_at)
                     log.info("NAS 巡检下次触发：%s（Cron=%s）", nxt_str, cron_expr)
                     _last_wait_due = due_at
                 time.sleep(sleep_s)

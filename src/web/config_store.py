@@ -22,9 +22,7 @@ CHANNEL_TYPE_KEYS: Tuple[Tuple[str, str], ...] = (
     ("feishu", "feishu_webhook_url"),
     ("bark", "bark_url"),
     ("pushplus", "pushplus_params"),
-    ("magic_push", "magic_push_params"),
     ("smtp", "smtp_params"),
-    ("wecom_app", "wecom_app_params"),
     ("webhook", "webhook_params"),
     ("meow", "meow_params"),
 )
@@ -199,9 +197,7 @@ def _mask_url(url: str) -> str:
 # JSON 配置渠道：字段 → 打码函数（还原时比较「打码(已存值) == 提交值」）
 _JSON_SECRET_FIELDS: Dict[str, Dict[str, Callable[[str], str]]] = {
     "pushplus": {"token": mask_secret},
-    "magic_push": {"token": mask_secret},
     "smtp": {"password": mask_secret},
-    "wecom_app": {"corp_secret": mask_secret},
     "webhook": {"url": _mask_url, "headers": _mask_headers},
 }
 

@@ -80,9 +80,30 @@ def is_loopback_request(environ) -> bool:
         return False
 
 
+#: 显式确认变量：只有同时设置它，FNMB_DISABLE_AUTH 才会真正生效。
+#: 目的：避免「以为只在反代后面、实际已暴露到局域网」这种一步到位的全量裸奔。
+AUTH_DISABLE_ACK_ENV = "FNMB_DISABLE_AUTH_ACK"
+
+
 def auth_disabled_by_env() -> bool:
-    """仅手装 Docker 等自建反代场景可显式关闭应用内鉴权。"""
-    return (os.getenv("FNMB_DISABLE_AUTH") or "").strip().lower() in ("1", "true", "yes", "on")
+    """仅手装 Docker 等自建反代场景可显式关闭应用内鉴权。
+
+    必须同时设置 FNMB_DISABLE_AUTH_ACK（值同样为 1/true/yes/on）才生效：
+    关闭后 /api/config、/api/save-config 等全部无需登录，等同于把推送配置页公开，
+    存在被改写推送地址（SSRF 原语）的风险，因此要求一次显式确认。
+    """
+    if (os.getenv("FNMB_DISABLE_AUTH") or "").strip().lower() not in ("1", "true", "yes", "on"):
+        return False
+    if (os.getenv(AUTH_DISABLE_ACK_ENV) or "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    print(
+        "=" * 60
+        + "\n已设置 FNMB_DISABLE_AUTH，但缺少显式确认，应用内鉴权**仍然开启**。\n"
+        + f"若确认前面已有自建反代鉴权、且本端口未暴露到局域网，请同时设置 {AUTH_DISABLE_ACK_ENV}=1 重启。\n"
+        + "=" * 60,
+        flush=True,
+    )
+    return False
 
 
 class SetupCodeStore:

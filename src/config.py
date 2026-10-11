@@ -5,15 +5,37 @@
 import copy
 import os
 import json
-from typing import List, Dict, Any
+import logging
+from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from notifier.channel_params import validate_channel_json
 from utils.value_parser import as_bool
 from valid_event_ids import filter_monitor_events
 
+_logger = logging.getLogger(__name__)
+
 # 推送标题前缀默认值；配置文件无 title_prefix 项时使用。仅当配置里显式存空字符串时才关闭前缀。
 TITLE_PREFIX_DEFAULT = "飞牛NAS"
+
+# 已移除的渠道对应的历史配置键：保留在 config.json 里不再生效，
+# 启动时提示一次即可（不报错、不删除用户文件，避免升级即崩）。
+_RETIRED_CHANNEL_KEYS = ("magic_push_params", "wecom_app_params")
+
+# 布尔型配置项：config.json 里可能被写成字符串（"1"/"true"/"0"/"false"），
+# 通用加载循环必须归一化，否则 "0"/"false" 会被当成真值。
+_BOOL_CONFIG_KEYS = frozenset({
+    "minimal_push_enabled",
+    "push_markdown_enabled",
+    "push_emoji_enabled",
+    "resume_from_cursor_on_start",
+    "ssh_ignore_loopback",
+    "media_lib_logger_enabled",
+    "dnd_enabled",
+    "poll_batch_summary_enabled",
+    "nas_patrol_enabled",
+    "notification_restart_enabled",
+})
 
 
 @dataclass
@@ -27,9 +49,7 @@ class Config:
     bark_url: str = ""  # Bark推送URL
     bark_icon: str = ""  # Bark 自定义图标 URL（留空使用默认图标）
     pushplus_params: str = ""  # PushPlus 推送参数（JSON 字符串，多个用 | 分隔）
-    magic_push_params: str = ""  # 魔法推送（JSON：base_url、token、可选 title、可选 use_inbound，多个用 | 分隔）
     smtp_params: str = ""  # SMTP 邮件参数（JSON：server、port、username、password、from、to；多个用 | 分隔）
-    wecom_app_params: str = ""  # 企业微信应用（JSON：corp_id、corp_secret、agent_id，可选 to_user/to_party/to_tag/api_base；多个用 | 分隔）
     webhook_params: str = ""  # 通用 Webhook（JSON：url，可选 method/content_type/headers/body；多个用 | 分隔）
     meow_params: str = ""  # MeoW（JSON：nickname，可选 url/api_base；多个用 | 分隔）
     
@@ -37,6 +57,10 @@ class Config:
     title_prefix: str = field(default=TITLE_PREFIX_DEFAULT)
     # 极简推送：开启后所有渠道仅推送一行关键信息（默认关闭）
     minimal_push_enabled: bool = False
+    # 结构化消息：企业微信 markdown、钉钉 markdown、飞书富文本 post（默认开启；渠道不支持时自动回退纯文本）
+    push_markdown_enabled: bool = True
+    # 推送文案是否保留装饰性图标（emoji）。默认关闭，保持文案简洁
+    push_emoji_enabled: bool = False
     # 忽略本机回环（127.0.0.1 / ::1）的 SSH 登录成功与断开；SSH 经内网穿透接入时来源同为回环，勿开启
     ssh_ignore_loopback: bool = False
 
@@ -82,6 +106,9 @@ class Config:
     scheduler_db_path: str = ""  # fn-scheduler scheduler.db，空则不轮询任务计划事件
     docker_socket_path: str = "/var/run/docker.sock"  # Docker Engine Unix socket；勾选 Docker 容器事件且文件可访问时监听
     logger_poll_interval: int = 5  # 秒，轮询间隔
+    # 启动时是否沿用已保存游标（默认 False：与历史行为一致，只处理启动后的新记录）。
+    # 开启后会补推「停机期间写入的日志」，适合容器短期重启不想漏事件的场景。
+    resume_from_cursor_on_start: bool = False
 
     # 轮询汇总模式：开启后同一轮查询到的多条事件合并为一条通知；关闭则逐条推送（易触发渠道限流）
     poll_batch_summary_enabled: bool = False
@@ -133,30 +160,70 @@ class Config:
             return candidate
         return Path("/app/config/config.json")
 
+    @staticmethod
+    def _read_json_config(path: Path) -> Tuple[Optional[Dict[str, Any]], str]:
+        """读取并解析配置文件，返回 (数据, 错误说明)。空错误串表示成功。
+
+        **必须显式用 UTF-8**：项目自带的 config.json 含中文（`title_prefix: "飞牛NAS"`），
+        在 Windows 等默认编码为 GBK 的环境下用 open(path, "r") 会抛 UnicodeDecodeError；
+        旧实现把它包在 except 里只打印一行警告，结果是**整个文件配置被静默忽略**，极难排查。
+        UTF-8 失败时回退平台默认编码，兼容历史上以 GBK 写出的文件。
+        """
+        last_decode_error: Optional[Exception] = None
+        for encoding in ("utf-8", None):
+            try:
+                with open(path, "r", encoding=encoding) as f:
+                    data = json.load(f)
+            except UnicodeDecodeError as e:
+                last_decode_error = e
+                continue
+            except json.JSONDecodeError as e:
+                return None, f"JSON 格式错误：{e}"
+            except OSError as e:
+                return None, f"读取失败：{e}"
+            if not isinstance(data, dict):
+                return None, "配置文件顶层必须是 JSON 对象"
+            return data, ""
+        return None, f"文件编码无法识别（既非 UTF-8 也非系统默认编码）：{last_decode_error}"
+
     def _load_from_file_skip_if_set(self):
         """从配置文件加载（可选），但跳过已从环境变量设置的配置项"""
         config_file = self._get_config_file_path()
-        if config_file.exists():
-            try:
-                with open(config_file, 'r') as f:
-                    data = json.load(f)
+        if not config_file.exists():
+            return
+        data, err = self._read_json_config(config_file)
+        if err:
+            _logger.error("配置文件读取失败，本次不加载任何文件配置项：%s -> %s", config_file, err)
+            print(f"警告: 配置文件读取失败 - {err}")
+            return
+        assert data is not None
 
-                # 覆盖配置 - 仅当配置项未从环境变量设置时才使用配置文件的值
-                for key, value in data.items():
-                    if hasattr(self, key):
-                        # 如果这个配置项已经从环境变量设置过，跳过
-                        if key in self._env_set_keys:
-                            continue
+        # 已移除的渠道：残留配置不再生效，但要明确提示，避免用户以为还在推送
+        for retired in _RETIRED_CHANNEL_KEYS:
+            if data.get(retired):
+                _logger.info(
+                    "配置项 `%s` 对应的推送渠道已移除，该项被忽略（可安全删除）；"
+                    "如需该渠道可改用「通用 Webhook」自行对接",
+                    retired,
+                )
 
-                        # 如果值是字符串且包含环境变量占位符，则进行替换
-                        if isinstance(value, str) and value.startswith('${') and value.endswith('}'):
-                            env_var_name = value[2:-1]  # 提取变量名
-                            env_value = os.getenv(env_var_name, '')  # 获取环境变量值，不存在则为空字符串
-                            setattr(self, key, env_value)
-                        else:
-                            setattr(self, key, value)
-            except Exception as e:
-                print(f"警告: 配置文件读取失败 - {e}")
+        # 覆盖配置 - 仅当配置项未从环境变量设置时才使用配置文件的值
+        for key, value in data.items():
+            if hasattr(self, key):
+                # 如果这个配置项已经从环境变量设置过，跳过
+                if key in self._env_set_keys:
+                    continue
+
+                # 如果值是字符串且包含环境变量占位符，则进行替换
+                if isinstance(value, str) and value.startswith('${') and value.endswith('}'):
+                    env_var_name = value[2:-1]  # 提取变量名
+                    env_value = os.getenv(env_var_name, '')  # 获取环境变量值，不存在则为空字符串
+                    setattr(self, key, env_value)
+                elif key in _BOOL_CONFIG_KEYS:
+                    # 布尔项归一化：兼容 "1"/"true"/"yes"/"on" 与 "0"/"false"/"no"/"off"
+                    setattr(self, key, as_bool(value, bool(getattr(self, key, False))))
+                else:
+                    setattr(self, key, value)
 
     def _apply_discovered_db_paths(self) -> None:
         """配置项为空时，按 compose 常见挂载路径自动探测可读的数据库文件。"""
@@ -174,10 +241,10 @@ class Config:
         """从配置文件重新加载 Web UI 可修改的项（保存时热加载用）。返回是否成功。"""
         if not config_path.exists():
             return False
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
+        data, err = self._read_json_config(config_path)
+        if err or data is None:
+            # 原先静默 return False，用户点了保存却看不到任何原因
+            _logger.error("配置热加载失败，沿用当前配置：%s → %s", config_path, err or "内容为空")
             return False
 
         # 先备份全部 dataclass 字段，校验失败时回滚，避免热加载后处于未调用 _validate 的不一致状态
@@ -200,15 +267,25 @@ class Config:
             self.bark_icon = data["bark_icon"]
         if not env_skip("minimal_push_enabled") and "minimal_push_enabled" in data:
             self.minimal_push_enabled = as_bool(data["minimal_push_enabled"], False)
+        if not env_skip("push_markdown_enabled") and "push_markdown_enabled" in data:
+            self.push_markdown_enabled = as_bool(data["push_markdown_enabled"], True)
+        if not env_skip("push_emoji_enabled") and "push_emoji_enabled" in data:
+            self.push_emoji_enabled = as_bool(data["push_emoji_enabled"], False)
         if not env_skip("ssh_ignore_loopback") and "ssh_ignore_loopback" in data:
             self.ssh_ignore_loopback = as_bool(data["ssh_ignore_loopback"], False)
         if not env_skip("smtp_params") and "smtp_params" in data and isinstance(data["smtp_params"], str):
             self.smtp_params = data["smtp_params"]
         if "pushplus_params" in data and isinstance(data["pushplus_params"], str):
             self.pushplus_params = data["pushplus_params"]
-        if "magic_push_params" in data and isinstance(data["magic_push_params"], str):
-            self.magic_push_params = data["magic_push_params"]
-        for key in ("wecom_app_params", "webhook_params", "meow_params"):
+        # 已移除的渠道：残留配置不再生效，但要明确提示，避免用户以为还在推送
+        for retired in _RETIRED_CHANNEL_KEYS:
+            if data.get(retired):
+                _logger.info(
+                    "配置项 `%s` 对应的推送渠道已移除，该项被忽略（可安全删除）；"
+                    "如需该渠道可改用「通用 Webhook」自行对接",
+                    retired,
+                )
+        for key in ("webhook_params", "meow_params"):
             if not env_skip(key) and isinstance(data.get(key), str):
                 setattr(self, key, data[key])
         if "title_prefix" in data and isinstance(data["title_prefix"], str):
@@ -223,6 +300,8 @@ class Config:
                 self.logger_poll_interval = int(data["logger_poll_interval"])
             except (TypeError, ValueError):
                 pass
+        if not env_skip("resume_from_cursor_on_start") and "resume_from_cursor_on_start" in data:
+            self.resume_from_cursor_on_start = as_bool(data["resume_from_cursor_on_start"], False)
         if not env_skip("logger_db_path") and "logger_db_path" in data and isinstance(data["logger_db_path"], str):
             self.logger_db_path = data["logger_db_path"].strip()
         if not env_skip("backup_db_path") and "backup_db_path" in data and isinstance(data["backup_db_path"], str):
@@ -301,6 +380,12 @@ class Config:
         if minimal_push_enabled := os.getenv('MINIMAL_PUSH_ENABLED'):
             self.minimal_push_enabled = minimal_push_enabled.lower() in ['1', 'true', 'yes', 'on']
             self._env_set_keys.add('minimal_push_enabled')
+        if push_markdown_enabled := os.getenv('PUSH_MARKDOWN_ENABLED'):
+            self.push_markdown_enabled = push_markdown_enabled.lower() in ['1', 'true', 'yes', 'on']
+            self._env_set_keys.add('push_markdown_enabled')
+        if push_emoji_enabled := os.getenv('PUSH_EMOJI_ENABLED'):
+            self.push_emoji_enabled = push_emoji_enabled.lower() in ['1', 'true', 'yes', 'on']
+            self._env_set_keys.add('push_emoji_enabled')
         if ssh_ignore_loopback := os.getenv('SSH_IGNORE_LOOPBACK'):
             self.ssh_ignore_loopback = ssh_ignore_loopback.lower() in ['1', 'true', 'yes', 'on']
             self._env_set_keys.add('ssh_ignore_loopback')
@@ -308,13 +393,16 @@ class Config:
             self.smtp_params = smtp_params
             self._env_set_keys.add('smtp_params')
         for env_name, key in (
-            ("WECOM_APP_PARAMS", "wecom_app_params"),
             ("WEBHOOK_PARAMS", "webhook_params"),
             ("MEOW_PARAMS", "meow_params"),
         ):
             if env_val := os.getenv(env_name):
                 setattr(self, key, env_val)
                 self._env_set_keys.add(key)
+        # 已移除渠道的历史环境变量：不生效但提示一次，避免用户以为还在推送
+        for retired_env in ("WECOM_APP_PARAMS", "MAGIC_PUSH_PARAMS"):
+            if os.getenv(retired_env):
+                _logger.info("环境变量 %s 对应的推送渠道已移除，该变量被忽略", retired_env)
 
         # 监控事件
         if events := os.getenv('MONITOR_EVENTS'):
@@ -369,6 +457,10 @@ class Config:
                 self._env_set_keys.add('logger_poll_interval')
             except (TypeError, ValueError):
                 print(f"警告: LOGGER_POLL_INTERVAL 不是整数，已忽略: {poll_interval}")
+
+        if resume := os.getenv('RESUME_FROM_CURSOR_ON_START'):
+            self.resume_from_cursor_on_start = resume.lower() in ['1', 'true', 'yes', 'on']
+            self._env_set_keys.add('resume_from_cursor_on_start')
 
         if os.getenv('MEDIA_LIB_LOGGER_ENABLED', '').strip().lower() in ('1', 'true', 'yes', 'on'):
             self.media_lib_logger_enabled = True
@@ -455,21 +547,6 @@ class Config:
                 except json.JSONDecodeError as e:
                     raise ValueError(f"PushPlus 参数不是合法 JSON: {e}")
 
-        if self.magic_push_params:
-            for part in (p.strip() for p in self.magic_push_params.split("|") if p.strip()):
-                try:
-                    obj = json.loads(part)
-                    if not isinstance(obj, dict):
-                        raise ValueError("魔法推送参数必须为 JSON 对象")
-                    base = (obj.get("base_url") or "").strip()
-                    token = (obj.get("token") or "").strip()
-                    if not base or not token:
-                        raise ValueError("魔法推送须包含 base_url 与 token")
-                    if not base.startswith("http"):
-                        raise ValueError("魔法推送 base_url 须为有效 http(s) 地址")
-                except json.JSONDecodeError as e:
-                    raise ValueError(f"魔法推送参数不是合法 JSON: {e}")
-
         if self.smtp_params:
             for part in (p.strip() for p in self.smtp_params.split("|") if p.strip()):
                 try:
@@ -489,7 +566,7 @@ class Config:
                 except json.JSONDecodeError as e:
                     raise ValueError(f"SMTP 参数不是合法 JSON: {e}")
 
-        for ch_type, key in (("wecom_app", "wecom_app_params"), ("webhook", "webhook_params"), ("meow", "meow_params")):
+        for ch_type, key in (("webhook", "webhook_params"), ("meow", "meow_params")):
             for part in (p.strip() for p in (getattr(self, key) or "").split("|") if p.strip()):
                 err = validate_channel_json(ch_type, part)
                 if err:

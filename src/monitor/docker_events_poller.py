@@ -11,11 +11,12 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .models import JournalEntry
+from utils.dedup_store import DedupStore
+from utils.logtime_display import format_ts_for_display, now_for_display
 
 try:
     import docker  # type: ignore
@@ -82,11 +83,8 @@ def _short_container_id(cid: str) -> str:
 def _parse_event_timestamp(ev: Dict[str, Any]) -> str:
     ts = ev.get("time") or ev.get("Time")
     if isinstance(ts, int) and ts > 0:
-        try:
-            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            pass
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return format_ts_for_display(ts)
+    return now_for_display()
 
 
 class DockerEventsPoller:
@@ -109,13 +107,22 @@ class DockerEventsPoller:
         self._client = None
         self._dedup_file = self.cursor_dir / "docker_events_poller_dedup.json"
         self._since_file = self.cursor_dir / "docker_events_poller_since.json"
-        self._dedup_seen: Dict[str, int] = {}
         self._events_since_dedup_flush: int = 0
         self._since_cursor_ts: int = 0
         self._since_dirty_count: int = 0
         self._start_cutoff_ts: int = 0
         self._start_cutoff_ns: int = 0
         self.logger = logging.getLogger(__name__)
+        self._dedup_store = DedupStore(self._dedup_file, _DEDUP_TTL_SECONDS, "Docker 事件", self.logger)
+
+    @property
+    def _dedup_seen(self) -> Dict[str, int]:
+        """去重缓存以 DedupStore 为唯一事实来源，这里仅做兼容访问。"""
+        return self._dedup_store.seen
+
+    @_dedup_seen.setter
+    def _dedup_seen(self, value: Dict[str, int]) -> None:
+        self._dedup_store.seen = value
 
     def add_handler(self, event_type: str, handler: Callable) -> None:
         self.event_handlers[event_type] = handler
@@ -149,38 +156,20 @@ class DockerEventsPoller:
         self.summary_batch_enqueue = enqueue
 
     def _load_dedup(self) -> None:
-        try:
-            if self._dedup_file.exists():
-                obj = json.loads(self._dedup_file.read_text() or "{}")
-                if isinstance(obj, dict):
-                    now = int(time.time())
-                    self._dedup_seen = {
-                        str(k): int(v)
-                        for k, v in obj.items()
-                        if isinstance(v, (int, float)) and int(v) >= now - _DEDUP_TTL_SECONDS
-                    }
-                    return
-        except Exception as e:
-            self.logger.warning("读取 Docker 事件去重缓存失败: %s", e)
-        self._dedup_seen = {}
+        self._dedup_store.load()
 
     def _save_dedup(self) -> None:
-        try:
-            self._dedup_file.write_text(json.dumps(self._dedup_seen, ensure_ascii=False))
-        except Exception as e:
-            self.logger.warning("写入 Docker 事件去重缓存失败: %s", e)
+        self._dedup_store.save()
 
     def _prune_dedup(self) -> None:
-        now = int(time.time())
-        cutoff = now - _DEDUP_TTL_SECONDS
-        self._dedup_seen = {k: v for k, v in self._dedup_seen.items() if v >= cutoff}
+        self._dedup_store.prune()
 
     def _load_since_cursor(self) -> Optional[int]:
         """读取上次提交的事件时间（秒）。不存在或损坏则返回 None（首次启动）。"""
         try:
             if not self._since_file.exists():
                 return None
-            obj = json.loads(self._since_file.read_text() or "{}")
+            obj = json.loads(self._since_file.read_text(encoding="utf-8") or "{}")
             if not isinstance(obj, dict):
                 return None
             v = obj.get("last_event_time")
@@ -197,7 +186,7 @@ class DockerEventsPoller:
         try:
             self.cursor_dir.mkdir(parents=True, exist_ok=True)
             payload = {"last_event_time": int(ts), "updated_at": int(time.time())}
-            self._since_file.write_text(json.dumps(payload, ensure_ascii=False))
+            self._since_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             self.logger.warning("写入 Docker events since 游标失败: %s", e)
 

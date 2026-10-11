@@ -14,13 +14,14 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
-from zoneinfo import ZoneInfo
 
 from .models import JournalEntry
+from .schema_probe import probe as probe_schema
 from .sqlite_uri import connect_readonly_with_fallback
+from utils.dedup_store import DedupStore
+from utils.logtime_display import format_ts_for_display, now_for_display
 
 PHOTO_SHARE_CREATED = "PHOTO_SHARE_CREATED"
 PHOTO_SHARE_EXPIRED = "PHOTO_SHARE_EXPIRED"
@@ -55,18 +56,16 @@ def _maybe_int(v: Any) -> Optional[int]:
 
 
 def _sec_to_local_str(sec: Optional[int]) -> str:
-    if sec is None:
-        return ""
+    """秒级时间戳 → 展示时间串；统一走 DISPLAY_TIMEZONE。"""
     try:
-        v = int(sec)
+        v = int(sec) if sec is not None else None
     except (TypeError, ValueError):
+        return ""
+    if v is None:
         return ""
     if v <= 0:
         return "永久有效"
-    try:
-        return datetime.fromtimestamp(v, tz=ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
-    except (OSError, ValueError):
-        return str(v)
+    return format_ts_for_display(v)
 
 
 class PhotoDBPoller:
@@ -91,9 +90,18 @@ class PhotoDBPoller:
         self._state_file = self.cursor_dir / "photo_db_poller_state.json"
         self._dedup_file = self.cursor_dir / "photo_db_poller_dedup.json"
         self.logger = logging.getLogger(__name__)
+        self._dedup_store = DedupStore(self._dedup_file, _DEDUP_TTL, "相册", self.logger)
         self.cursor_dir.mkdir(parents=True, exist_ok=True)
-        self._dedup_seen: Dict[str, int] = {}
         self._last_face_debounce_log_ts = 0.0
+
+    @property
+    def _dedup_seen(self) -> Dict[str, int]:
+        """去重缓存以 DedupStore 为唯一事实来源，这里仅做兼容访问。"""
+        return self._dedup_store.seen
+
+    @_dedup_seen.setter
+    def _dedup_seen(self, value: Dict[str, int]) -> None:
+        self._dedup_store.seen = value
 
     def add_handler(self, event_type: str, handler: Callable) -> None:
         self.event_handlers[event_type] = handler
@@ -145,7 +153,7 @@ class PhotoDBPoller:
         }
         try:
             if self._state_file.exists():
-                raw = self._state_file.read_text().strip()
+                raw = self._state_file.read_text(encoding="utf-8").strip()
                 if raw:
                     obj = json.loads(raw)
                     if isinstance(obj, dict):
@@ -166,35 +174,18 @@ class PhotoDBPoller:
 
     def _save_state(self, state: Dict[str, Any]) -> None:
         try:
-            self._state_file.write_text(json.dumps(state, ensure_ascii=False))
+            self._state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             self.logger.warning("写入相册轮询状态失败: %s", e)
 
     def _load_dedup(self) -> None:
-        try:
-            if self._dedup_file.exists():
-                obj = json.loads(self._dedup_file.read_text() or "{}")
-                if isinstance(obj, dict):
-                    now = int(time.time())
-                    self._dedup_seen = {
-                        str(k): int(v)
-                        for k, v in obj.items()
-                        if isinstance(v, (int, float)) and int(v) >= now - _DEDUP_TTL
-                    }
-                    return
-        except Exception as e:
-            self.logger.warning("读取相册去重缓存失败: %s", e)
-        self._dedup_seen = {}
+        self._dedup_store.load()
 
     def _save_dedup(self) -> None:
-        try:
-            self._dedup_file.write_text(json.dumps(self._dedup_seen, ensure_ascii=False))
-        except Exception as e:
-            self.logger.warning("写入相册去重缓存失败: %s", e)
+        self._dedup_store.save()
 
     def _prune_dedup(self) -> None:
-        now = int(time.time())
-        self._dedup_seen = {k: v for k, v in self._dedup_seen.items() if int(v) >= now - _DEDUP_TTL}
+        self._dedup_store.prune()
 
     def _connect(self) -> sqlite3.Connection:
         # 仅做轮询读取，使用只读连接避免要求数据库目录可写（WAL/journal 权限）
@@ -227,9 +218,7 @@ class PhotoDBPoller:
         event_data.setdefault("_source_cursor", fp)
         event_data.setdefault("_source_event_id", event_type)
         raw_log = json.dumps(raw_obj, ensure_ascii=False)
-        ts = _sec_to_local_str(ts_sec) if ts_sec else datetime.now(ZoneInfo("Asia/Shanghai")).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+        ts = _sec_to_local_str(ts_sec) if ts_sec else now_for_display()
         entry = JournalEntry(
             cursor=f"photo-{event_type}-{now}-{hash(fp) & 0xFFFFFFFF:x}",
             timestamp=ts,
@@ -274,6 +263,8 @@ class PhotoDBPoller:
         return "，".join(parts) if parts else "未知"
 
     def _baseline(self, conn: sqlite3.Connection, state: Dict[str, Any]) -> None:
+        # 先做一次 schema 自检：列名与真机不符时查询会静默返回空数据，日志里必须留痕
+        probe_schema(conn, "photo", self.logger, self.db_path)
         row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM share_link").fetchone()
         state["last_share_link_id"] = int(row[0] or 0)
         row_d = conn.execute("SELECT COALESCE(MAX(id), 0) FROM device").fetchone()

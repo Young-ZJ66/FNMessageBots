@@ -10,18 +10,26 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
-from zoneinfo import ZoneInfo
 
 from .models import JournalEntry
+from .schema_probe import probe as probe_schema
 from .sqlite_uri import connect_readonly_with_fallback
+from utils.dedup_store import DedupStore
+from utils.logtime_display import format_ts_for_display, now_for_display
 
 TRIM_RESOURCE_ADDED = "TRIM_RESOURCE_ADDED"
 TRIM_SCRAPE_SUCCESS = "TRIM_SCRAPE_SUCCESS"
+TRIM_RESOURCE_DELETED = "TRIM_RESOURCE_DELETED"
 
-_TRIM_EVENTS: Set[str] = {TRIM_RESOURCE_ADDED, TRIM_SCRAPE_SUCCESS}
+_TRIM_EVENTS: Set[str] = {TRIM_RESOURCE_ADDED, TRIM_SCRAPE_SUCCESS, TRIM_RESOURCE_DELETED}
+
+# media_delete 表的候选列名（不同飞牛版本字段名不完全一致，运行时按实际列自适应）
+_MEDIA_DELETE_TS_COLUMNS = ("update_time", "delete_time", "create_time", "time")
+_MEDIA_DELETE_PATH_COLUMNS = ("path", "file_path", "media_path")
+_MEDIA_DELETE_TITLE_COLUMNS = ("title", "name")
+_MEDIA_DELETE_GUID_COLUMNS = ("guid", "item_guid", "media_guid")
 
 # 认为「刮削完成」的条目类型（Season 等容器常为 0，不推刮削）
 _SCRAPE_TYPES = ("Movie", "TV", "Episode")
@@ -33,18 +41,16 @@ _DEDUP_TTL = 24 * 3600
 
 
 def _ms_to_str(ms: Optional[int]) -> str:
-    if ms is None:
-        return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+    """毫秒/秒时间戳 → 展示时间串；统一走 DISPLAY_TIMEZONE。"""
     try:
-        v = int(ms)
+        v = int(ms) if ms is not None else None
     except (TypeError, ValueError):
-        return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+        v = None
+    if v is None:
+        return now_for_display()
     if v > 10_000_000_000:
         v = int(v / 1000)
-    try:
-        return datetime.fromtimestamp(v, tz=ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
-    except (OSError, ValueError):
-        return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+    return format_ts_for_display(v)
 
 
 class MediaDBPoller:
@@ -68,10 +74,22 @@ class MediaDBPoller:
         self._thread: Optional[threading.Thread] = None
         self._state_file = self.cursor_dir / "media_db_poller_state.json"
         self._dedup_file = self.cursor_dir / "media_db_poller_dedup.json"
+        self._dedup_store = DedupStore(self._dedup_file, _DEDUP_TTL, "影视库", logging.getLogger(__name__))
         self.logger = logging.getLogger(__name__)
         self.cursor_dir.mkdir(parents=True, exist_ok=True)
         self._dedup_seen: Dict[str, int] = {}
         self._open_db_error_count = 0
+        # media_delete 表的实际列名缓存（None 表示尚未探测）
+        self._media_delete_cols: Optional[Set[str]] = None
+
+    @property
+    def _dedup_seen(self) -> Dict[str, int]:
+        """去重缓存以 DedupStore 为唯一事实来源，这里仅做兼容访问。"""
+        return self._dedup_store.seen
+
+    @_dedup_seen.setter
+    def _dedup_seen(self, value: Dict[str, int]) -> None:
+        self._dedup_store.seen = value
 
     def add_handler(self, event_type: str, handler: Callable) -> None:
         self.event_handlers[event_type] = handler
@@ -112,7 +130,7 @@ class MediaDBPoller:
         }
         try:
             if self._state_file.exists():
-                raw = self._state_file.read_text().strip()
+                raw = self._state_file.read_text(encoding="utf-8").strip()
                 if raw:
                     obj = json.loads(raw)
                     if isinstance(obj, dict):
@@ -130,35 +148,18 @@ class MediaDBPoller:
                 # 防止状态无限膨胀：仅保留最近有变更的条目由 fetch 快照自然收缩困难，故截断
                 items = list(fb.items())[-60000:]
                 state["fetch_by_guid"] = dict(items)
-            self._state_file.write_text(json.dumps(state, ensure_ascii=False))
+            self._state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             self.logger.warning("写入影视库轮询状态失败: %s", e)
 
     def _load_dedup(self) -> None:
-        try:
-            if self._dedup_file.exists():
-                obj = json.loads(self._dedup_file.read_text() or "{}")
-                if isinstance(obj, dict):
-                    now = int(time.time())
-                    self._dedup_seen = {
-                        str(k): int(v)
-                        for k, v in obj.items()
-                        if isinstance(v, (int, float)) and int(v) >= now - _DEDUP_TTL
-                    }
-                    return
-        except Exception as e:
-            self.logger.warning("读取影视库去重缓存失败: %s", e)
-        self._dedup_seen = {}
+        self._dedup_store.load()
 
     def _save_dedup(self) -> None:
-        try:
-            self._dedup_file.write_text(json.dumps(self._dedup_seen, ensure_ascii=False))
-        except Exception as e:
-            self.logger.warning("写入影视库去重缓存失败: %s", e)
+        self._dedup_store.save()
 
     def _prune_dedup(self) -> None:
-        now = int(time.time())
-        self._dedup_seen = {k: v for k, v in self._dedup_seen.items() if int(v) >= now - _DEDUP_TTL}
+        self._dedup_store.prune()
 
     def _connect(self) -> sqlite3.Connection:
         """只读 + immutable 兜底；禁止回退可写连接（只读挂载上会导致 unable to open）。"""
@@ -229,6 +230,8 @@ class MediaDBPoller:
             self.logger.error("处理影视库事件失败 %s: %s", event_type, e, exc_info=True)
 
     def _baseline(self, conn: sqlite3.Connection, state: Dict[str, Any]) -> None:
+        # 先做一次 schema 自检：列名与真机不符时查询会静默返回空数据，日志里必须留痕
+        probe_schema(conn, "trim_media", self.logger, self.db_path)
         row = conn.execute(
             "SELECT COALESCE(MAX(create_time),0), COALESCE(MAX(update_time),0) FROM item"
         ).fetchone()
@@ -237,8 +240,7 @@ class MediaDBPoller:
             "SELECT COALESCE(MAX(COALESCE(update_time,create_time)),0) FROM item_media"
         ).fetchone()
         mmt = int(row_m[0] or 0)
-        row_d = conn.execute("SELECT COALESCE(MAX(update_time),0) FROM media_delete").fetchone()
-        mdd = int(row_d[0] or 0)
+        mdd = self._media_delete_watermark(conn)
         state["last_item_create_ms"] = mcr
         state["last_item_update_ms"] = mur
         state["last_media_ts_ms"] = mmt
@@ -260,6 +262,102 @@ class MediaDBPoller:
             mcr,
             mur,
         )
+
+    def _media_delete_columns(self, conn: sqlite3.Connection) -> Set[str]:
+        """读取 media_delete 表的实际列名；表不存在时返回空集合（该功能静默降级）。"""
+        if self._media_delete_cols is not None:
+            return self._media_delete_cols
+        cols: Set[str] = set()
+        try:
+            for r in conn.execute("PRAGMA table_info(media_delete)"):
+                try:
+                    name = str(r["name"] if hasattr(r, "keys") else r[1]).strip()
+                except Exception:
+                    continue
+                if name:
+                    cols.add(name)
+        except Exception as e:
+            self.logger.info("media_delete 表不可用，跳过影视删除事件: %s", e)
+        self._media_delete_cols = cols
+        if cols:
+            self.logger.info("media_delete 列: %s", ", ".join(sorted(cols)))
+        return cols
+
+    @staticmethod
+    def _first_present(cols: Set[str], candidates) -> str:
+        for name in candidates:
+            if name in cols:
+                return name
+        return ""
+
+    def _media_delete_watermark(self, conn: sqlite3.Connection) -> int:
+        """media_delete 当前水位（无表/无可用时间列时返回 0）。"""
+        cols = self._media_delete_columns(conn)
+        ts_col = self._first_present(cols, _MEDIA_DELETE_TS_COLUMNS)
+        if not ts_col:
+            return 0
+        try:
+            row = conn.execute(
+                f"SELECT COALESCE(MAX({ts_col}),0) FROM media_delete"
+            ).fetchone()
+            return int(row[0] or 0)
+        except Exception as e:
+            self.logger.warning("读取 media_delete 水位失败: %s", e)
+            return 0
+
+    def _poll_media_delete(
+        self, conn: sqlite3.Connection, state: Dict[str, Any]
+    ) -> int:
+        """查询 media_delete 中晚于水位的删除记录并推送。返回新的水位。
+
+        表结构随飞牛版本有差异，这里按实际列拼查询，缺列时只取能取到的字段；
+        表不存在或查询失败时返回原水位，不影响其它影视事件的轮询。
+        """
+        cols = self._media_delete_columns(conn)
+        if not cols:
+            return int(state.get("last_media_delete_ms") or 0)
+        ts_col = self._first_present(cols, _MEDIA_DELETE_TS_COLUMNS)
+        if not ts_col:
+            return int(state.get("last_media_delete_ms") or 0)
+
+        path_col = self._first_present(cols, _MEDIA_DELETE_PATH_COLUMNS)
+        title_col = self._first_present(cols, _MEDIA_DELETE_TITLE_COLUMNS)
+        guid_col = self._first_present(cols, _MEDIA_DELETE_GUID_COLUMNS)
+        select_cols = [ts_col]
+        for c in (path_col, title_col, guid_col):
+            if c and c not in select_cols:
+                select_cols.append(c)
+
+        watermark = int(state.get("last_media_delete_ms") or 0)
+        max_ts = watermark
+        sql = (
+            f"SELECT {', '.join(select_cols)} FROM media_delete "
+            f"WHERE {ts_col} > ? ORDER BY {ts_col} ASC LIMIT 500"
+        )
+        try:
+            rows = list(conn.execute(sql, (watermark,)))
+        except Exception as e:
+            self.logger.warning("查询 media_delete 失败（跳过本类型）: %s", e)
+            return watermark
+
+        for r in rows:
+            d = dict(r) if hasattr(r, "keys") else {}
+            if not d:
+                continue
+            ts = int(d.get(ts_col) or 0)
+            max_ts = max(max_ts, ts)
+            path = (str(d.get(path_col) or "").strip() if path_col else "")
+            title = (str(d.get(title_col) or "").strip() if title_col else "")
+            guid = d.get(guid_col) if guid_col else None
+            name = title or (path.rsplit("/", 1)[-1] if path else "") or str(guid or "")
+            ev = {
+                "title": title,
+                "path": path,
+                "guid": guid,
+                "message": f"媒体文件已删除: {name}" if name else "媒体文件已删除",
+            }
+            self._emit(TRIM_RESOURCE_DELETED, ev, d, ts)
+        return max_ts
 
     def _poll_once(self, state: Dict[str, Any]) -> None:
         if not self.db_path or not os.path.exists(self.db_path):
@@ -291,7 +389,6 @@ class MediaDBPoller:
             lic = int(state.get("last_item_create_ms") or 0)
             liu = int(state.get("last_item_update_ms") or 0)
             lmt = int(state.get("last_media_ts_ms") or 0)
-            lmd = int(state.get("last_media_delete_ms") or 0)
             fb: Dict[str, int] = state.get("fetch_by_guid") or {}
             if not isinstance(fb, dict):
                 fb = {}
@@ -405,10 +502,13 @@ class MediaDBPoller:
                 }
                 self._emit(TRIM_RESOURCE_ADDED, ev, d, ts)
 
+            # 4) 资源删除（media_delete 表；列名随版本差异自适应，无表则跳过）
+            max_dd = self._poll_media_delete(conn, state)
+
             state["last_item_create_ms"] = max_ic
             state["last_item_update_ms"] = max_iu
             state["last_media_ts_ms"] = max_mt
-            state["last_media_delete_ms"] = lmd
+            state["last_media_delete_ms"] = max_dd
             state["fetch_by_guid"] = fb
         finally:
             try:

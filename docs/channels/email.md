@@ -75,13 +75,3 @@
 | Gmail | `smtp.gmail.com` | 587（需应用专用密码或 OAuth，本项目按用户名密码登录） |
 
 发送失败时，请优先核对：**授权码是否最新**、**端口与服务商要求是否一致**、**是否需在服务商侧开启「允许不太安全的应用」或单独开启 SMTP**。
-
-## 捐赠
-
-创作不易，为了项目的稳定和可持续发展，欢迎大家捐赠支持
-<table>
-  <tr>
-    <td><img src="../../assets/icons/wechat_pay.jpg" width="300" alt="图1说明" /></td>
-    <td><img src="../../assets/icons/ali_pay.jpg" width="300" alt="图2说明" /></td>
-  </tr>
-</table>

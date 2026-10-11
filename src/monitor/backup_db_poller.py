@@ -8,12 +8,14 @@ import logging
 import sqlite3
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .models import JournalEntry
+from .schema_probe import probe as probe_schema
 from .sqlite_uri import connect_readonly_with_fallback
+from utils.dedup_store import DedupStore
+from utils.logtime_display import format_ts_for_display, now_for_display
 
 
 BACKUP_SUCCESS_EVENT = "BACKUP_TASK_SUCCESS"
@@ -25,18 +27,16 @@ DEDUP_TTL_SECONDS = 3 * 24 * 3600
 
 
 def _ts_to_str(ts: Optional[int]) -> str:
-    if ts is None:
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    """展示用时间串；统一走 DISPLAY_TIMEZONE（原实现用容器本地时区，与其它轮询器不一致）。"""
     try:
-        v = int(ts)
+        v = int(ts) if ts is not None else None
     except (TypeError, ValueError):
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        v = None
+    if v is None:
+        return now_for_display()
     if v > 10_000_000_000:
         v = int(v / 1000)
-    try:
-        return datetime.fromtimestamp(v).strftime("%Y-%m-%d %H:%M:%S")
-    except (OSError, ValueError):
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return format_ts_for_display(v)
 
 
 def _normalize_ts_to_seconds(ts: Optional[int]) -> int:
@@ -69,10 +69,19 @@ class BackupDBPoller:
         self._cursor_file = self.cursor_dir / "backup_db_poller_cursor.txt"
         self._dedup_file = self.cursor_dir / "backup_db_poller_dedup.json"
         self.logger = logging.getLogger(__name__)
+        self._dedup_store = DedupStore(self._dedup_file, DEDUP_TTL_SECONDS, "备份", self.logger)
         self.cursor_dir.mkdir(parents=True, exist_ok=True)
-        self._dedup_seen: Dict[str, int] = {}
         self.poll_batch_summary_enabled = False
         self.summary_batch_enqueue: Optional[Callable[[List[Dict[str, Any]]], None]] = None
+
+    @property
+    def _dedup_seen(self) -> Dict[str, int]:
+        """去重缓存以 DedupStore 为唯一事实来源，这里仅做兼容访问。"""
+        return self._dedup_store.seen
+
+    @_dedup_seen.setter
+    def _dedup_seen(self, value: Dict[str, int]) -> None:
+        self._dedup_store.seen = value
 
     def add_handler(self, event_type: str, handler: Callable):
         self.event_handlers[event_type] = handler
@@ -105,7 +114,7 @@ class BackupDBPoller:
         default = {"last_finished_time": 0, "last_id": 0}
         try:
             if self._cursor_file.exists():
-                raw = self._cursor_file.read_text().strip()
+                raw = self._cursor_file.read_text(encoding="utf-8").strip()
                 if not raw:
                     return default
                 # 兼容旧版纯数字游标：仅保存了 last_id
@@ -127,36 +136,18 @@ class BackupDBPoller:
                 "last_finished_time": int(last_finished_time or 0),
                 "last_id": int(last_id or 0),
             }
-            self._cursor_file.write_text(json.dumps(payload, ensure_ascii=False))
+            self._cursor_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             self.logger.warning("写入备份轮询游标失败: %s", e)
 
     def _load_dedup(self) -> None:
-        try:
-            if self._dedup_file.exists():
-                obj = json.loads(self._dedup_file.read_text() or "{}")
-                if isinstance(obj, dict):
-                    now = int(time.time())
-                    self._dedup_seen = {
-                        str(k): int(v)
-                        for k, v in obj.items()
-                        if isinstance(v, (int, float)) and int(v) >= now - DEDUP_TTL_SECONDS
-                    }
-                    return
-        except Exception as e:
-            self.logger.warning("读取备份去重缓存失败: %s", e)
-        self._dedup_seen = {}
+        self._dedup_store.load()
 
     def _save_dedup(self) -> None:
-        try:
-            self._dedup_file.write_text(json.dumps(self._dedup_seen, ensure_ascii=False))
-        except Exception as e:
-            self.logger.warning("写入备份去重缓存失败: %s", e)
+        self._dedup_store.save()
 
     def _prune_dedup(self) -> None:
-        now = int(time.time())
-        cutoff = now - DEDUP_TTL_SECONDS
-        self._dedup_seen = {k: v for k, v in self._dedup_seen.items() if int(v) >= cutoff}
+        self._dedup_store.prune()
 
     def _connect(self) -> sqlite3.Connection:
         # 仅做轮询读取，使用只读连接避免要求数据库目录可写（WAL/journal 权限）
@@ -167,6 +158,8 @@ class BackupDBPoller:
     def _get_latest_watermark(self) -> Dict[str, int]:
         try:
             conn = self._connect()
+            # schema 自检只在首次调用时实际执行（内部去重）
+            probe_schema(conn, "backup", self.logger, self.db_path)
             row = conn.execute(
                 """
                 SELECT

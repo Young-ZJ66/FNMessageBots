@@ -47,7 +47,7 @@ from notifier.unified_notifier import UnifiedNotifier
 from web.ui_app import start_ui_server_in_background
 
 # 仅当 monitor_events 包含对应事件时才轮询各库（避免空跑）
-TRIMMEDIA_POLL_EVENTS = frozenset({"TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS"})
+TRIMMEDIA_POLL_EVENTS = frozenset({"TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED"})
 TRIMACTIVITY_POLL_EVENTS = frozenset({"MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT"})
 
 
@@ -83,7 +83,7 @@ class Application:
         banner = f"""
         启动时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         监控模式: 数据库轮询 (logger_data.db3 log 表)
-        通知方式: 企业微信/企业微信应用/钉钉/飞书机器人/Bark/PushPlus/魔法推送/SMTP邮件/通用Webhook/MeoW
+        通知方式: 企业微信/钉钉/飞书机器人/Bark/PushPlus/SMTP邮件/通用Webhook/MeoW
 
         """
         print(banner)
@@ -309,6 +309,7 @@ class Application:
             monitor_events=self.config.monitor_events,
             media_lib_logger_enabled=getattr(self.config, "media_lib_logger_enabled", False),
             media_lib_service_patterns=getattr(self.config, "media_lib_service_patterns", []),
+            resume_from_cursor_on_start=getattr(self.config, "resume_from_cursor_on_start", False),
         )
         if getattr(self.config, "poll_batch_summary_enabled", False):
             poller.set_batch_handler(self._dispatch_batch_events)
@@ -330,9 +331,7 @@ class Application:
                 self.config.feishu_webhook_url,
                 self.config.bark_url,
                 self.config.pushplus_params,
-                getattr(self.config, "magic_push_params", "") or "",
                 getattr(self.config, "smtp_params", "") or "",
-                getattr(self.config, "wecom_app_params", "") or "",
                 getattr(self.config, "webhook_params", "") or "",
                 getattr(self.config, "meow_params", "") or "",
             ])
@@ -620,7 +619,7 @@ class Application:
             self.docker_events_poller.clear_handlers()
         if self.ssh_journal_poller:
             self.ssh_journal_poller.clear_handlers()
-        trim_ev = {"TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS"}
+        trim_ev = {"TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED"}
         act_ev = {"MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT"}
         photo_ev = set(PHOTO_POLL_EVENTS)
         scheduler_ev = set(SCHEDULER_POLL_EVENTS)
@@ -666,9 +665,7 @@ class Application:
             self.config.feishu_webhook_url,
             self.config.bark_url,
             self.config.pushplus_params,
-            getattr(self.config, "magic_push_params", "") or "",
             getattr(self.config, "smtp_params", "") or "",
-            getattr(self.config, "wecom_app_params", "") or "",
             getattr(self.config, "webhook_params", "") or "",
             getattr(self.config, "meow_params", "") or "",
         ])
@@ -710,6 +707,7 @@ class Application:
                         db_path=self.config.logger_db_path,
                         media_lib_logger_enabled=getattr(self.config, "media_lib_logger_enabled", False),
                         media_lib_service_patterns=getattr(self.config, "media_lib_service_patterns", []),
+                        resume_from_cursor_on_start=getattr(self.config, "resume_from_cursor_on_start", False),
                     )
                     if getattr(self.config, "poll_batch_summary_enabled", False):
                         self.log_poller.set_batch_handler(self._dispatch_batch_events)
@@ -947,7 +945,9 @@ class Application:
 
         try:
             restart_log = Path("/tmp/restart_reason.log")
-            with open(restart_log, "a") as f:
+            # reason 含中文，必须显式 UTF-8：非 UTF-8 locale 下会抛 UnicodeEncodeError，
+            # 而这里被 except 吞掉 —— 重启原因会静默丢失
+            with open(restart_log, "a", encoding="utf-8") as f:
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 f.write(f"{timestamp} - {reason}\n")
         except Exception:

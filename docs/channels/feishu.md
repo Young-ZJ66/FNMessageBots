@@ -21,13 +21,3 @@
 到这里，飞书配置完成，复制WebHoook地址到项目，然后选择飞书渠道，粘贴即可
 ![创建机器人步骤 1](images/feishu-step7.png)
 ![创建机器人步骤 1](images/feishu-step8.png)
-
-## 捐赠
-
-创作不易，为了项目的稳定和可持续发展，欢迎大家捐赠支持
-<table>
-  <tr>
-    <td><img src="../../assets/icons/wechat_pay.jpg" width="300" alt="图1说明" /></td>
-    <td><img src="../../assets/icons/ali_pay.jpg" width="300" alt="图2说明" /></td>
-  </tr>
-</table>

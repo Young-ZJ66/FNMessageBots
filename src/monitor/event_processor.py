@@ -123,6 +123,7 @@ class EventProcessor:
             'MEDIA_USER_CREATED': lambda ed, e: self._handle_simple_notification('MEDIA_USER_CREATED', ed, e),
             'TRIM_RESOURCE_ADDED': lambda ed, e: self._handle_trim_library_db('TRIM_RESOURCE_ADDED', ed, e),
             'TRIM_SCRAPE_SUCCESS': lambda ed, e: self._handle_trim_library_db('TRIM_SCRAPE_SUCCESS', ed, e),
+            'TRIM_RESOURCE_DELETED': lambda ed, e: self._handle_trim_library_db('TRIM_RESOURCE_DELETED', ed, e),
             'PHOTO_SHARE_CREATED': lambda ed, e: self._handle_simple_notification('PHOTO_SHARE_CREATED', ed, e),
             'PHOTO_SHARE_EXPIRED': lambda ed, e: self._handle_simple_notification('PHOTO_SHARE_EXPIRED', ed, e),
             'PHOTO_DEVICE_REGISTERED': lambda ed, e: self._handle_simple_notification('PHOTO_DEVICE_REGISTERED', ed, e),
@@ -428,6 +429,7 @@ class EventProcessor:
             raw_log=raw_log,
             timestamp=timestamp
         )
+        self._store_notification_log('LoginSucc2FA1', event_data, raw_log, entry, source='db')
 
     def _handle_login_fail(self, event_data: Dict[str, Any], entry: JournalEntry):
         """处理登录失败事件"""
@@ -446,6 +448,7 @@ class EventProcessor:
             raw_log=raw_log,
             timestamp=timestamp
         )
+        self._store_notification_log('LoginFail', event_data, raw_log, entry, source='db')
     
     def _handle_logout(self, event_data: Dict[str, Any], entry: JournalEntry):
         """处理退出登录事件"""
@@ -465,6 +468,7 @@ class EventProcessor:
             raw_log=raw_log,
             timestamp=timestamp
         )
+        self._store_notification_log('Logout', event_data, raw_log, entry, source='db')
     
     def _handle_found_disk(self, event_data: Dict[str, Any], entry: JournalEntry):
         """处理发现硬盘事件"""
@@ -484,6 +488,7 @@ class EventProcessor:
             raw_log=raw_log,
             timestamp=timestamp
         )
+        self._store_notification_log('FoundDisk', event_data, raw_log, entry, source='db')
 
     def _handle_ssh_invalid_user(self, event_data: Dict[str, Any], entry: JournalEntry):
         """处理SSH无效用户尝试事件"""
@@ -574,6 +579,7 @@ class EventProcessor:
             raw_log=raw_log,
             timestamp=timestamp
         )
+        self._store_notification_log('APP_CRASH', event_data, raw_log, entry, source='db')
     
     def _handle_app_update_failed(self, event_data: Dict[str, Any], entry: JournalEntry):
         """处理应用更新失败事件"""
@@ -592,6 +598,7 @@ class EventProcessor:
             raw_log=raw_log,
             timestamp=timestamp
         )
+        self._store_notification_log('APP_UPDATE_FAILED', event_data, raw_log, entry, source='db')
 
     def _handle_app_start_failed_local(self, event_data: Dict[str, Any], entry: JournalEntry):
         """处理应用启动失败事件（本地运行异常）"""
@@ -606,6 +613,9 @@ class EventProcessor:
             raw_log=raw_log,
             timestamp=timestamp
         )
+        self._store_notification_log(
+            'APP_START_FAILED_LOCAL_APP_RUN_EXCEPTION', event_data, raw_log, entry, source='db'
+        )
 
     def _handle_app_auto_start_failed_docker(self, event_data: Dict[str, Any], entry: JournalEntry):
         """处理应用自启动失败事件（Docker 不可用）"""
@@ -619,6 +629,9 @@ class EventProcessor:
             event_data=event_data,
             raw_log=raw_log,
             timestamp=timestamp
+        )
+        self._store_notification_log(
+            'APP_AUTO_START_FAILED_DOCKER_NOT_AVAILABLE', event_data, raw_log, entry, source='db'
         )
 
     def _handle_app_lifecycle(self, event_type: str, event_data: Dict[str, Any], entry: JournalEntry):
@@ -844,6 +857,8 @@ class EventProcessor:
         timestamp = getattr(entry, 'timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         self.logger.warning(f"CPU温度告警: 超过 {threshold}°C")
         raw_log = getattr(entry, 'raw_data', '{}')
+        # 与其它「会推送」的事件保持一致，落原始日志便于事后核查（原先此事件漏落盘）
+        self._store_notification_log('CPU_TEMPERATURE_ALARM', event_data, raw_log, entry, source='db')
         self.notifier.send_notification(
             event_type='CPU_TEMPERATURE_ALARM',
             event_data=event_data,
@@ -866,6 +881,7 @@ class EventProcessor:
             raw_log=raw_log,
             timestamp=timestamp
         )
+        self._store_notification_log('UPS_ONBATT', event_data, raw_log, entry, source='db')
     
     def _handle_ups_onbatt_lowbatt(self, event_data: Dict[str, Any], entry: JournalEntry):
         """处理UPS切换到电池供电且电池电量低事件"""
@@ -882,6 +898,7 @@ class EventProcessor:
             raw_log=raw_log,
             timestamp=timestamp
         )
+        self._store_notification_log('UPS_ONBATT_LOWBATT', event_data, raw_log, entry, source='db')
     
     def _handle_ups_online(self, event_data: Dict[str, Any], entry: JournalEntry):
         """处理UPS切换到市电供电事件"""
@@ -898,6 +915,7 @@ class EventProcessor:
             raw_log=raw_log,
             timestamp=timestamp
         )
+        self._store_notification_log('UPS_ONLINE', event_data, raw_log, entry, source='db')
 
     def _handle_ups_enable(self, event_data: Dict[str, Any], entry: JournalEntry):
         """处理开启 UPS 支持事件"""
@@ -910,6 +928,7 @@ class EventProcessor:
             raw_log=raw_log,
             timestamp=timestamp
         )
+        self._store_notification_log('UPS_ENABLE', event_data, raw_log, entry, source='db')
 
     def _handle_ups_disable(self, event_data: Dict[str, Any], entry: JournalEntry):
         """处理关闭 UPS 支持事件"""
@@ -922,6 +941,7 @@ class EventProcessor:
             raw_log=raw_log,
             timestamp=timestamp
         )
+        self._store_notification_log('UPS_DISABLE', event_data, raw_log, entry, source='db')
     
     def _add_to_cache_and_schedule_send(self, cache_list, timer_attr, event_data, event_type, entry):
         """将事件添加到缓存并安排发送"""
