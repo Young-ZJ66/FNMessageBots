@@ -51,7 +51,6 @@
 python tools/log_manager.py stats
 python tools/log_manager.py recent --hours 24
 python tools/log_manager.py type LoginSucc --limit 10
-python tools/log_manager.py export ./logs.json --event-type APP_CRASH
 python tools/log_manager.py cleanup 30
 ```
 
@@ -84,7 +83,9 @@ python tools/log_manager.py cleanup 30
 | `max_log_age` | 应用运行日志 `monitor_*.log` 保留天数 |
 | `dnd_enabled` / `dnd_start_time` / `dnd_end_time` | 勿扰开关与时段（HH:MM，可跨日） |
 | `push_markdown_enabled` | 结构化消息（默认开启）：企业微信/钉钉用 markdown、飞书用富文本 post 按行分条展示；Bark/PushPlus/SMTP/通用 Webhook 等不支持富文本的渠道仍发纯文本。渠道不支持时自动回退纯文本 |
-| `push_emoji_enabled` | 推送文案是否保留 icon 类字符（默认关闭，保持简洁） |
+| `media_batch_summary_enabled` | 影视/相册事件聚合推送（默认开启）：影视入库、相册分享等高频同类事件在静默窗口内合并为一条结构化消息（标题带条数、正文逐条列出），批量刮削入库不再刷屏 |
+| `media_batch_window` | 聚合静默窗口（秒，默认 90）：窗口内无新事件才发送；单条滞留超过窗口 4 倍强制发出；`0` 表示按轮询轮次立即发送 |
+| `push_emoji_enabled` | 已废弃：推送文案模板已不再携带 emoji 图标，此开关保留仅为兼容旧配置，不再产生效果 |
 | `ssh_ignore_loopback` | 忽略来源为 127.0.0.1 / ::1 的 SSH 登录成功与断开（默认关闭；失败告警不受影响；SSH 经 frp 等内网穿透接入时勿开启）。环境变量 `SSH_IGNORE_LOOPBACK` |
 
 #### 各渠道消息形态
@@ -133,7 +134,8 @@ python tools/log_manager.py cleanup 30
 - `LOG_LEVEL`、`HTTP_POOL_SIZE`、`HTTP_RETRY_COUNT`、`HTTP_TIMEOUT`、`DEDUP_WINDOW`
 - `LOG_RETENTION_DAYS`、`MAX_LOG_AGE`
 - `PUSH_MARKDOWN_ENABLED`：结构化消息开关（`1`/`true` 开启）
-- `PUSH_EMOJI_ENABLED`：推送文案保留 icon（默认关闭）
+- `MEDIA_BATCH_SUMMARY_ENABLED`：影视/相册事件聚合推送（默认开启）
+- `MEDIA_BATCH_WINDOW`：聚合静默窗口（秒，默认 90）
 - `DISPLAY_TIMEZONE`：通知与记录的时间显示时区（默认 `Asia/Shanghai`；各数据源统一按此时区展示）
 - `UI_PORT`：Web 端口（默认 `18080`）；`UI_HOST`：监听地址（默认 `0.0.0.0`，仅本机访问可设 `127.0.0.1`）
 - `FNMB_WEB_PASSWORD`：未设密码时作为初始 Web 密码（至少 8 位）
@@ -261,6 +263,8 @@ PYTHONPATH=. LOGGER_DB_PATH=./logger_data.db3 WECHAT_WEBHOOK_URL=xxx python3 src
 ## 故障排除
 
 - **收不到通知**：先看启动日志里的 `[schema 自检]` 行（见上文），再检查 Webhook / PushPlus、网络与 `docker compose logs`。
+- **收到的不是结构化消息（纯文本）**：确认 `push_markdown_enabled` 已开启且镜像为最新（结构化推送在 2.6.0 引入）；日志中出现「结构化消息发送失败，回退纯文本」说明渠道拒绝了 markdown（多为安全设置或旧版企业微信客户端），进程会记住该渠道改发纯文本，重启容器可重新探测。
+- **影视入库一条一条刷屏**：确认「影视/相册事件聚合推送」已开启（默认开启）并按需调整 `media_batch_window` 静默窗口。
 - **时间不对**：调整 `LOGTIME_DISPLAY_OFFSET_SECONDS`（默认已为 +8 小时）。
 - **重复通知**：调大 `dedup_window`（秒）。
 - **Web 配置页打不开**：确认端口映射与防火墙；容器内可设 `UI_PORT` 并与 `ports` 一致。

@@ -44,6 +44,7 @@ logs/
 .windsurf/
 .continue/
 .aider*
+.zcodeignore
 AGENTS.md
 CLAUDE.md
 GEMINI.md
@@ -53,6 +54,12 @@ QODER.md
 mcp.json
 skills/
 .github/copilot-instructions.md
+
+# 本地安全扫描产物（Mimosa）
+.mimosa/
+
+# 本地 UI 预览临时目录
+.uipreview/
 
 # OS
 .DS_Store
