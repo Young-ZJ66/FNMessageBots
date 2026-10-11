@@ -33,6 +33,7 @@ _BOOL_CONFIG_KEYS = frozenset({
     "media_lib_logger_enabled",
     "dnd_enabled",
     "poll_batch_summary_enabled",
+    "media_batch_summary_enabled",
     "nas_patrol_enabled",
     "notification_restart_enabled",
 })
@@ -112,6 +113,10 @@ class Config:
 
     # 轮询汇总模式：开启后同一轮查询到的多条事件合并为一条通知；关闭则逐条推送（易触发渠道限流）
     poll_batch_summary_enabled: bool = False
+    # 媒体库事件聚合推送：影视入库/相册等高频同类事件在静默窗口内合并为一条结构化消息（默认开启）
+    media_batch_summary_enabled: bool = True
+    # 聚合静默窗口（秒）：窗口内没有新事件才发送；一次批量刮削会合并为一条消息。0 表示按轮询轮次立即发送
+    media_batch_window: int = 90
     
     # 勿扰模式（开启后在该时段内不推送，结束后汇总为一条消息）
     dnd_enabled: bool = False
@@ -170,7 +175,10 @@ class Config:
         UTF-8 失败时回退平台默认编码，兼容历史上以 GBK 写出的文件。
         """
         last_decode_error: Optional[Exception] = None
-        for encoding in ("utf-8", None):
+        # 依次尝试：UTF-8（项目标准）→ 平台默认编码 → GBK。
+        # 显式保留 GBK 兜底：系统开启「UTF-8 模式」时 None 也解析为 UTF-8，
+        # 历史上以 GBK 写出的 config.json 会两次失败，导致整个文件配置被静默忽略。
+        for encoding in ("utf-8", None, "gbk"):
             try:
                 with open(path, "r", encoding=encoding) as f:
                     data = json.load(f)
@@ -184,7 +192,7 @@ class Config:
             if not isinstance(data, dict):
                 return None, "配置文件顶层必须是 JSON 对象"
             return data, ""
-        return None, f"文件编码无法识别（既非 UTF-8 也非系统默认编码）：{last_decode_error}"
+        return None, f"文件编码无法识别（UTF-8/系统默认/GBK 均失败）：{last_decode_error}"
 
     def _load_from_file_skip_if_set(self):
         """从配置文件加载（可选），但跳过已从环境变量设置的配置项"""
@@ -323,6 +331,13 @@ class Config:
                 pass
         if "poll_batch_summary_enabled" in data:
             self.poll_batch_summary_enabled = as_bool(data["poll_batch_summary_enabled"], False)
+        if "media_batch_summary_enabled" in data:
+            self.media_batch_summary_enabled = as_bool(data["media_batch_summary_enabled"], True)
+        if "media_batch_window" in data and data["media_batch_window"] is not None:
+            try:
+                self.media_batch_window = int(data["media_batch_window"])
+            except (TypeError, ValueError):
+                pass
         if not env_skip("media_lib_logger_enabled") and "media_lib_logger_enabled" in data:
             self.media_lib_logger_enabled = as_bool(data["media_lib_logger_enabled"], False)
         if not env_skip("media_lib_service_patterns") and "media_lib_service_patterns" in data and isinstance(data["media_lib_service_patterns"], list):
@@ -465,6 +480,15 @@ class Config:
         if os.getenv('MEDIA_LIB_LOGGER_ENABLED', '').strip().lower() in ('1', 'true', 'yes', 'on'):
             self.media_lib_logger_enabled = True
             self._env_set_keys.add('media_lib_logger_enabled')
+        if media_batch_enabled := os.getenv('MEDIA_BATCH_SUMMARY_ENABLED'):
+            self.media_batch_summary_enabled = media_batch_enabled.lower() in ['1', 'true', 'yes', 'on']
+            self._env_set_keys.add('media_batch_summary_enabled')
+        if media_batch_window := os.getenv('MEDIA_BATCH_WINDOW'):
+            try:
+                self.media_batch_window = int(media_batch_window)
+                self._env_set_keys.add('media_batch_window')
+            except (TypeError, ValueError):
+                print(f"警告: MEDIA_BATCH_WINDOW 不是整数，已忽略: {media_batch_window}")
         if trim_m := os.getenv('TRIM_MEDIA_DB_PATH'):
             self.trim_media_db_path = trim_m.strip()
             self._env_set_keys.add('trim_media_db_path')
@@ -585,6 +609,13 @@ class Config:
         except (TypeError, ValueError):
             _iv = 720
         self.nas_patrol_interval_minutes = max(5, min(10080, _iv))
+
+        try:
+            _mbw = int(self.media_batch_window)
+        except (TypeError, ValueError):
+            _mbw = 90
+        # 0 允许（表示按轮询轮次立即发送）；上限 1 小时，防止事件长期滞留
+        self.media_batch_window = max(0, min(3600, _mbw))
 
         from utils.cron_util import resolve_nas_patrol_cron
 

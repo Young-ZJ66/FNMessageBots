@@ -16,16 +16,11 @@ from typing import Any, Callable, Dict, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
+from version import APP_VERSION
 from utils.logger import setup_logging
 from utils.push_stats import init as init_push_stats
 from monitor.db_log_poller import DBLogPoller
-from monitor.backup_db_poller import (
-    BackupDBPoller,
-    BACKUP_FAILED_EVENT,
-    BACKUP_PARTIAL_EVENT,
-    BACKUP_POLL_EVENTS,
-    BACKUP_SUCCESS_EVENT,
-)
+from monitor.backup_db_poller import BackupDBPoller, BACKUP_POLL_EVENTS
 from monitor.media_db_poller import MediaDBPoller
 from monitor.trim_activity_poller import TrimActivityPoller
 from monitor.photo_db_poller import PHOTO_POLL_EVENTS, PhotoDBPoller
@@ -49,6 +44,14 @@ from web.ui_app import start_ui_server_in_background
 # 仅当 monitor_events 包含对应事件时才轮询各库（避免空跑）
 TRIMMEDIA_POLL_EVENTS = frozenset({"TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED"})
 TRIMACTIVITY_POLL_EVENTS = frozenset({"MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT"})
+
+# 影视/相册等高频同类事件：开启聚合窗口后在静默期内合并为一条消息，避免批量刮削刷屏
+MEDIA_DEFER_EVENTS = frozenset({
+    "TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED",
+    "MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT", "MEDIA_USER_CREATED",
+    "PHOTO_SHARE_CREATED", "PHOTO_SHARE_EXPIRED", "PHOTO_DEVICE_REGISTERED",
+    "FACE_RECOGNITION_UPDATED",
+})
 
 
 class Application:
@@ -75,6 +78,7 @@ class Application:
         self._exit_code = 0
         self._unified_batch_buf: List[Dict[str, Any]] = []
         self._unified_batch_lock = threading.Lock()
+        self._unified_last_enqueue_ts = 0.0
         self._unified_flush_stop = threading.Event()
         self._unified_flush_thread: Optional[threading.Thread] = None
 
@@ -88,14 +92,51 @@ class Application:
         """
         print(banner)
 
-    def _take_unified_batch_buf(self) -> List[Dict[str, Any]]:
-        """取出并清空外部库汇总队列（拷贝列表，避免与 extend 并发共享同一 list 引用）。"""
+    def _media_batch_enabled(self) -> bool:
+        """媒体库事件聚合推送是否启用（不校验窗口；窗口为 0 时按轮询轮次立即发送）。"""
+        return bool(getattr(self.config, "media_batch_summary_enabled", True))
+
+    def _media_batch_window_seconds(self) -> int:
+        """聚合静默窗口（秒）；未启用或窗口为 0 返回 0（到期规则退化为立即发送）。"""
+        if not self._media_batch_enabled():
+            return 0
+        try:
+            return max(0, int(getattr(self.config, "media_batch_window", 90) or 0))
+        except (TypeError, ValueError):
+            return 90
+
+    def _take_unified_batch_buf(self, *, force: bool = False) -> List[Dict[str, Any]]:
+        """取出到期项（force=True 取全部，关机兜底用），并从队列移除。
+
+        媒体类事件带聚合窗口：静默 media_batch_window 秒、或单条滞留超过窗口 4 倍
+        （持续刮削时的硬上限）后才算到期；其余事件始终到期。
+        拷贝列表，避免与 extend 并发共享同一 list 引用。
+        """
         with self._unified_batch_lock:
             if not self._unified_batch_buf:
                 return []
-            taken = list(self._unified_batch_buf)
-            self._unified_batch_buf = []
-            return taken
+            now = time.time()
+            window = self._media_batch_window_seconds()
+            last_enq = self._unified_last_enqueue_ts
+            due: List[Dict[str, Any]] = []
+            keep: List[Dict[str, Any]] = []
+            for it in self._unified_batch_buf:
+                if force or not isinstance(it, dict):
+                    due.append(it)
+                    continue
+                deferred = bool(it.get("_deferred"))
+                if not deferred or window <= 0:
+                    due.append(it)
+                    continue
+                enq = it.get("_enqueued_at") or 0
+                if (now - enq) >= window * 4 or (last_enq and (now - last_enq) >= window):
+                    due.append(it)
+                else:
+                    keep.append(it)
+            if not due:
+                return []
+            self._unified_batch_buf = keep
+            return due
 
     def _enqueue_unified_batch_items(self, items: List[Dict[str, Any]]) -> None:
         """影视/相册/Docker/备份/任务计划 等先入队，在主日志下一轮汇总时或定时刷盘时合并推送。"""
@@ -103,12 +144,19 @@ class Application:
             return
         from monitor.batch_dedupe import dedupe_poll_batch_items
 
+        defer = self._media_batch_enabled()
+        now = time.time()
+        for it in items:
+            if isinstance(it, dict):
+                it["_enqueued_at"] = now
+                it["_deferred"] = bool(defer and str(it.get("event_type") or "") in MEDIA_DEFER_EVENTS)
         merged = dedupe_poll_batch_items(list(items))
         if not merged:
             return
         with self._unified_batch_lock:
             self._unified_batch_buf.extend(merged)
             self._unified_batch_buf = dedupe_poll_batch_items(self._unified_batch_buf)
+            self._unified_last_enqueue_ts = now
 
     def _dispatch_batch_events(self, batch_events: List[Dict[str, Any]]) -> None:
         """主日志轮询汇总：与队列中已等待的外部库事件（含备份/任务计划）合并为一次 POLL_BATCH_SUMMARY。"""
@@ -122,11 +170,11 @@ class Application:
         if pending:
             self.event_processor.process_batch_events(pending)
 
-    def _flush_unified_batch_pending_only(self) -> None:
-        """仅刷出队列中外部库事件（无主日志本轮时由定时线程调用）。"""
+    def _flush_unified_batch_pending_only(self, *, force: bool = False) -> None:
+        """刷出队列中已到期的外部库事件（无主日志本轮时由定时线程调用）。"""
         if not self.event_processor:
             return
-        buf = self._take_unified_batch_buf()
+        buf = self._take_unified_batch_buf(force=force)
         if not buf:
             return
         try:
@@ -147,7 +195,8 @@ class Application:
     def _start_unified_batch_flush_thread(self) -> None:
         if self._unified_flush_thread and self._unified_flush_thread.is_alive():
             return
-        if not getattr(self.config, "poll_batch_summary_enabled", False):
+        batch_mode = bool(getattr(self.config, "poll_batch_summary_enabled", False)) or self._media_batch_enabled()
+        if not batch_mode:
             return
         if not self.event_processor:
             return
@@ -167,13 +216,14 @@ class Application:
         """按配置启动或停止外部库汇总队列的定时刷盘线程。"""
         if not self.config or not self.event_processor:
             self._stop_unified_batch_flush_thread()
-            self._flush_unified_batch_pending_only()
+            self._flush_unified_batch_pending_only(force=True)
             return
-        if getattr(self.config, "poll_batch_summary_enabled", False):
+        batch_mode = bool(getattr(self.config, "poll_batch_summary_enabled", False)) or self._media_batch_enabled()
+        if batch_mode:
             self._start_unified_batch_flush_thread()
         else:
             self._stop_unified_batch_flush_thread()
-            self._flush_unified_batch_pending_only()
+            self._flush_unified_batch_pending_only(force=True)
 
 
     def _probe_db_readable(
@@ -194,7 +244,7 @@ class Application:
             if self.logger:
                 self.logger.warning("%s 不可访问: %s (%s)", label, db_path, e)
             else:
-                print(f"⚠ {label} 不可访问: {db_path}（{e}）")
+                print(f"警告: {label} 不可访问: {db_path}（{e}）")
             self._print_db_permission_hint(label, db_path)
             return False
 
@@ -582,72 +632,70 @@ class Application:
             self.log_poller.skip_ssh_events = journal_ok
             self.log_poller.ignore_ssh_loopback = ssh_ignore_loopback
 
-        pbs = bool(getattr(self.config, "poll_batch_summary_enabled", False)) and self.event_processor is not None
+        pbs = (
+            bool(getattr(self.config, "poll_batch_summary_enabled", False)) or self._media_batch_enabled()
+        ) and self.event_processor is not None
         batch_enq = self._enqueue_unified_batch_items if pbs else None
-        if self.media_db_poller:
-            self.media_db_poller.set_poll_batch_summary(pbs, batch_enq)
-        if self.trim_activity_poller:
-            self.trim_activity_poller.set_poll_batch_summary(pbs, batch_enq)
-        if self.photo_db_poller:
-            self.photo_db_poller.set_poll_batch_summary(pbs, batch_enq)
-        if self.docker_events_poller:
-            self.docker_events_poller.set_poll_batch_summary(pbs, batch_enq)
-        if self.backup_poller:
-            self.backup_poller.set_poll_batch_summary(pbs, batch_enq)
-        if self.scheduler_db_poller:
-            self.scheduler_db_poller.set_poll_batch_summary(pbs, batch_enq)
-        if self.ssh_journal_poller:
-            self.ssh_journal_poller.set_poll_batch_summary(pbs, batch_enq)
+        # 主日志轮询器走 set_batch_handler，其余外部库轮询器统一接汇总队列
+        for poller in self._pollers():
+            if poller is not self.log_poller:
+                poller.set_poll_batch_summary(pbs, batch_enq)
+
+    def _pollers(self) -> List[Any]:
+        """当前已创建的全部轮询器；启动/停止/注册等统一遍历，避免逐个判空。"""
+        return [
+            p
+            for p in (
+                self.log_poller,
+                self.backup_poller,
+                self.media_db_poller,
+                self.trim_activity_poller,
+                self.photo_db_poller,
+                self.scheduler_db_poller,
+                self.docker_events_poller,
+                self.ssh_journal_poller,
+            )
+            if p is not None
+        ]
+
+    def _start_pollers(self) -> None:
+        for poller in self._pollers():
+            poller.start()
+
+    def _stop_pollers(self) -> None:
+        for poller in self._pollers():
+            poller.stop()
 
     def _register_db_event_handlers(self) -> None:
         """为 logger / 备份 / 影视库 / 相册 SQLite 轮询器注册 monitor_events 中的处理器。"""
         if not self.event_processor or not self.config:
             return
-        if self.log_poller:
-            self.log_poller.clear_handlers()
-        if self.backup_poller:
-            self.backup_poller.clear_handlers()
-        if self.media_db_poller:
-            self.media_db_poller.clear_handlers()
-        if self.trim_activity_poller:
-            self.trim_activity_poller.clear_handlers()
-        if self.photo_db_poller:
-            self.photo_db_poller.clear_handlers()
-        if self.scheduler_db_poller:
-            self.scheduler_db_poller.clear_handlers()
-        if self.docker_events_poller:
-            self.docker_events_poller.clear_handlers()
-        if self.ssh_journal_poller:
-            self.ssh_journal_poller.clear_handlers()
+        for poller in self._pollers():
+            poller.clear_handlers()
         trim_ev = {"TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED"}
         act_ev = {"MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT"}
-        photo_ev = set(PHOTO_POLL_EVENTS)
-        scheduler_ev = set(SCHEDULER_POLL_EVENTS)
-        docker_ev = set(DOCKER_POLL_EVENTS)
-        ssh_ev = set(SSH_JOURNAL_EVENTS)
+        # 主日志轮询器兜底登记所有事件；其余轮询器只登记自己数据源的事件类型
+        poller_event_sets: List[tuple] = [
+            (self.backup_poller, set(BACKUP_POLL_EVENTS)),
+            (self.media_db_poller, trim_ev),
+            (self.trim_activity_poller, act_ev),
+            (self.photo_db_poller, set(PHOTO_POLL_EVENTS)),
+            (self.scheduler_db_poller, set(SCHEDULER_POLL_EVENTS)),
+            (self.docker_events_poller, set(DOCKER_POLL_EVENTS)),
+            (self.ssh_journal_poller, set(SSH_JOURNAL_EVENTS)),
+        ]
         registered = 0
         for event_type in self.config.monitor_events:
             handler = self.event_processor.get_handler(event_type)
             if not handler:
-                print(f"✗ 未知事件类型: {event_type}")
+                print(f"未知事件类型: {event_type}")
                 continue
             # 登录/退出保留 logger 兜底，避免 trimactivity 的 app_name 过滤导致漏报。
             if self.log_poller:
                 self.log_poller.add_handler(event_type, handler)
-            if self.backup_poller and event_type in (BACKUP_SUCCESS_EVENT, BACKUP_FAILED_EVENT, BACKUP_PARTIAL_EVENT):
-                self.backup_poller.add_handler(event_type, handler)
-            if self.media_db_poller and event_type in trim_ev:
-                self.media_db_poller.add_handler(event_type, handler)
-            if self.trim_activity_poller and event_type in act_ev:
-                self.trim_activity_poller.add_handler(event_type, handler)
-            if self.photo_db_poller and event_type in photo_ev:
-                self.photo_db_poller.add_handler(event_type, handler)
-            if self.scheduler_db_poller and event_type in scheduler_ev:
-                self.scheduler_db_poller.add_handler(event_type, handler)
-            if self.docker_events_poller and event_type in docker_ev:
-                self.docker_events_poller.add_handler(event_type, handler)
-            if self.ssh_journal_poller and event_type in ssh_ev:
-                self.ssh_journal_poller.add_handler(event_type, handler)
+            for poller, evset in poller_event_sets:
+                if poller is not None and event_type in evset:
+                    poller.add_handler(event_type, handler)
             registered += 1
         print(f"已注册 {registered} 个事件处理器")
 
@@ -676,22 +724,7 @@ class Application:
             self.log_poller = self._build_log_poller()
             self._sync_optional_pollers()
             self._register_db_event_handlers()
-            if self.log_poller:
-                self.log_poller.start()
-            if self.backup_poller:
-                self.backup_poller.start()
-            if self.media_db_poller:
-                self.media_db_poller.start()
-            if self.trim_activity_poller:
-                self.trim_activity_poller.start()
-            if self.photo_db_poller:
-                self.photo_db_poller.start()
-            if self.scheduler_db_poller:
-                self.scheduler_db_poller.start()
-            if self.docker_events_poller:
-                self.docker_events_poller.start()
-            if self.ssh_journal_poller:
-                self.ssh_journal_poller.start()
+            self._start_pollers()
             if self.logger:
                 self.logger.info("热加载完成：监控已启动")
             self._refresh_poll_batch_summary_thread()
@@ -723,22 +756,7 @@ class Application:
                     print("主日志库配置不可用，已停止主日志库轮询器。")
             self._sync_optional_pollers()
             self._register_db_event_handlers()
-            if self.log_poller:
-                self.log_poller.start()
-            if self.backup_poller:
-                self.backup_poller.start()
-            if self.media_db_poller:
-                self.media_db_poller.start()
-            if self.trim_activity_poller:
-                self.trim_activity_poller.start()
-            if self.photo_db_poller:
-                self.photo_db_poller.start()
-            if self.scheduler_db_poller:
-                self.scheduler_db_poller.start()
-            if self.docker_events_poller:
-                self.docker_events_poller.start()
-            if self.ssh_journal_poller:
-                self.ssh_journal_poller.start()
+            self._start_pollers()
             if self.logger:
                 self.logger.info("热加载完成：监控配置已更新")
             self._refresh_poll_batch_summary_thread()
@@ -766,7 +784,7 @@ class Application:
                     self.notifier.send_system_notification(
                         'APP_ERROR',
                         '应用初始化失败: 未知错误',
-                        {'hostname': socket.gethostname(), 'version': '2.6.0'}
+                        {'hostname': socket.gethostname(), 'version': APP_VERSION}
                     )
                 sys.exit(1)
             
@@ -800,22 +818,12 @@ class Application:
                     self.notifier.send_system_notification(
                         'APP_START',
                         '飞牛NAS日志监控系统已启动，开始监控系统事件',
-                        {'hostname': socket.gethostname(), 'version': '2.6.0'}
+                        {'hostname': socket.gethostname(), 'version': APP_VERSION}
                     )
                 else:
                     print("距上次启动通知不足 10 分钟，跳过本次启动通知（避免频繁重启刷屏）")
-                for poller in (
-                    self.log_poller,
-                    self.backup_poller,
-                    self.media_db_poller,
-                    self.trim_activity_poller,
-                    self.photo_db_poller,
-                    self.scheduler_db_poller,
-                    self.docker_events_poller,
-                    self.ssh_journal_poller,
-                ):
-                    if poller:
-                        poller.start()
+                for poller in self._pollers():
+                    poller.start()
                 self._refresh_poll_batch_summary_thread()
 
             # 设置信号处理
@@ -958,7 +966,7 @@ class Application:
                 self.notifier.send_system_notification(
                     'APP_ERROR',
                     f'触发自动重启: {reason}',
-                    {'hostname': socket.gethostname(), 'version': '2.6.0'}
+                    {'hostname': socket.gethostname(), 'version': APP_VERSION}
                 )
         except Exception:
             pass
@@ -972,33 +980,18 @@ class Application:
         """关闭应用"""
         print("\n正在关闭应用...")
         self._stop_unified_batch_flush_thread()
-        self._flush_unified_batch_pending_only()
+        self._flush_unified_batch_pending_only(force=True)
 
         # 发送停止通知（自动重启时已发过 APP_ERROR，不再追加）
         if self.notifier and not getattr(self, "_auto_restarting", False):
             self.notifier.send_system_notification(
                 'APP_STOP',
                 '飞牛NAS日志监控系统已停止，监控服务暂停',
-                {'hostname': socket.gethostname(), 'version': '2.6.0'}
+                {'hostname': socket.gethostname(), 'version': APP_VERSION}
             )
 
         # 停止数据库轮询器
-        if self.log_poller:
-            self.log_poller.stop()
-        if self.backup_poller:
-            self.backup_poller.stop()
-        if self.media_db_poller:
-            self.media_db_poller.stop()
-        if self.trim_activity_poller:
-            self.trim_activity_poller.stop()
-        if self.photo_db_poller:
-            self.photo_db_poller.stop()
-        if self.scheduler_db_poller:
-            self.scheduler_db_poller.stop()
-        if self.docker_events_poller:
-            self.docker_events_poller.stop()
-        if self.ssh_journal_poller:
-            self.ssh_journal_poller.stop()
+        self._stop_pollers()
 
         # 停止运行日志清理线程
         cleanup_flag = getattr(self.logger, 'cleanup_stop_flag', None) if self.logger else None

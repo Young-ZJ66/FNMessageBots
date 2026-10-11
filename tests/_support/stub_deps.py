@@ -187,6 +187,12 @@ def install() -> None:
         if name in sys.modules:
             continue
         stub = _make_stub(name)
+        if name == "flask":
+            # PEP 562：web.ui_app 用 `from flask import Flask, ...` 导入，
+            # 空桩会导致 ImportError；未知属性返回可调用桩即可满足导入期需求。
+            stub.__getattr__ = _autostub_getattr
+        # docker / psutil / croniter 保持空桩：
+        # 相关模块以 try-import 区分「依赖缺失」，导入成功但属性缺失时走各自的降级路径。
         sys.modules[name] = stub
 
 
