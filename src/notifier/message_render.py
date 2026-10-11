@@ -79,8 +79,8 @@ class MessageRenderMixin:
 
         版式：
             概要（EVENT_NOTES）留在引用块外；
-            引用块内首行为「时间: …」，其后为明细行（纯文本行，无列表标记——
-            企微 markdown 不支持列表，"- " 会原样显示为字符）。
+            引用块内为明细行（纯文本行，无列表标记——企微 markdown 不支持列表），
+            「时间: …」作为引用块末行收尾。
         不做二次业务渲染，避免主文案与结构化文案出现信息差异。
         """
         try:
@@ -91,12 +91,12 @@ class MessageRenderMixin:
         if note:
             segments.append(self._clean_text(note))
         quote_parts: List[str] = []
-        if ts_line:
-            quote_parts.append(self._clean_text(ts_line))
         if body.strip():
             # 正文不能过 _clean_text（整体 strip 会吃掉行首结构），逐行去图标即可
             quoted = _markdown_body_from_plain(self._strip_body_emojis(body))
             quote_parts.extend(ln for ln in quoted.split("\n"))
+        if ts_line:
+            quote_parts.append(self._clean_text(ts_line))
         if quote_parts:
             segments.append("\n".join(f"> {ln}" if ln.strip() else ">" for ln in quote_parts))
         return "\n\n".join(segments)

@@ -120,9 +120,9 @@ class ContentBuildersMixin:
     ) -> Tuple[str, str, str]:
         """构建消息的三段结构：(时间行, 明细正文, 备注文案)。
 
-        时间行带「时间: 」前缀。纯文本渠道由 _build_content 顺序拼接；
-        markdown 渲染层把时间行与明细正文整体收进「>」引用块，概要留在外面。
-        for_batch_inner=True 时用于多事件汇总内的子块：无时间行、无备注。
+        时间行带「时间: 」前缀。纯文本渠道由 _build_content 以「概要 → 明细 → 时间」
+        顺序拼接（时间收尾）；markdown 渲染层把时间行与明细正文整体收进「>」引用块，
+        时间同为末行。for_batch_inner=True 时用于多事件汇总内的子块：无时间行、无备注。
         """
         # 批量汇总：多条时整段在入口处理（仅一条时间行 + 子块无时间/无备注）
         if event_type == 'POLL_BATCH_SUMMARY':
@@ -251,15 +251,11 @@ class ContentBuildersMixin:
         *,
         for_batch_inner: bool = False,
     ) -> str:
-        """构建纯文本消息内容：时间行 + 概要 + 明细正文顺序拼接。
-
-        概要紧跟时间行、明细之前——与 markdown 渠道的分层保持一致
-        （概要是"是否需要处理"的判断依据，必须最先可读）。
-        """
+        """构建纯文本消息内容：概要 + 明细正文 + 时间行（时间收尾）。"""
         ts_line, body, note = self._build_content_parts(
             event_type, event_data, timestamp, raw_log, for_batch_inner=for_batch_inner
         )
-        segments = [seg for seg in (ts_line, note, body) if seg]
+        segments = [seg for seg in (note, body, ts_line) if seg]
         return "\n".join(segments)
 
     def _extract_single_event_from_batch(
@@ -1528,9 +1524,9 @@ class ContentBuildersMixin:
         return content
 
     def _build_system_content(self, event_type: str, event_data: Dict[str, Any], message: str) -> str:
-        """构建系统事件消息内容：时间行在前，与事件消息的分层保持一致。"""
+        """构建系统事件消息内容：正文在前，「时间: 」行收尾（与事件消息一致）。"""
         ts = str(event_data.get("timestamp") or "") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        content = f"{ts}\n{message}"
+        content = f"{message}\n时间: {ts}"
         return self._strip_body_emojis(content)
 
     def _build_minimal_system_one_line(self, event_type: str, message: str) -> str:
