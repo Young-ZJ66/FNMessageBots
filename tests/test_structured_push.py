@@ -91,9 +91,11 @@ class TestWechatStructured(NotifierCase):
         self.assertEqual(sent["msgtype"], "markdown")
         content = sent["markdown"]["content"]
         self.assertIn("登录成功通知", content)
-        # 结构化：键值行转为列表项
-        self.assertIn("- 用户名: admin", content)
-        self.assertIn("- IP地址: 192.168.1.10", content)
+        # 结构化：时间与键值明细收进引用块，无列表标记
+        self.assertIn("> 时间: 2026-01-01 12:00:00", content)
+        self.assertIn("> 用户名: admin", content)
+        self.assertIn("> IP地址: 192.168.1.10", content)
+        self.assertNotIn("- ", content, "企微 markdown 不支持列表，不得生成列表标记")
 
     def test_fallback_to_text_when_markdown_rejected(self):
         stub_deps.set_fake_handler(_reject_markdown)
@@ -151,7 +153,8 @@ class TestDingtalkStructured(NotifierCase):
         self.assertEqual(sent["msgtype"], "markdown")
         self.assertTrue(sent["markdown"]["title"], "钉钉 markdown 必带 title")
         self.assertIn("CPU使用率告警", sent["markdown"]["title"])
-        self.assertIn("- 使用率阈值: 90%", sent["markdown"]["text"])
+        self.assertIn("使用率阈值: 90%", sent["markdown"]["text"])
+        self.assertNotIn("- ", sent["markdown"]["text"], "企微/钉钉 markdown 不支持列表，不得生成列表标记")
 
     def test_fallback_to_text_when_markdown_rejected(self):
         stub_deps.set_fake_handler(_reject_markdown)
@@ -302,21 +305,21 @@ class TestMarkdownConversionUnit(unittest.TestCase):
     def test_timestamp_line_not_converted(self):
         out = _markdown_body_from_plain("2026-01-01 12:00:00\n用户名: admin")
         self.assertEqual(out.splitlines()[0], "2026-01-01 12:00:00")
-        self.assertEqual(out.splitlines()[1], "- 用户名: admin")
+        self.assertEqual(out.splitlines()[1], "用户名: admin")
 
-    def test_indented_lines_become_items(self):
+    def test_indented_lines_become_plain_lines(self):
         out = _markdown_body_from_plain("【登录成功通知】\n\t用户名: a\n\tIP: 1.1.1.1\n\n说明行")
         self.assertEqual(
             out.splitlines(),
-            ["**登录成功通知**", "- 用户名: a", "- IP: 1.1.1.1", "", "说明行"],
+            ["**登录成功通知**", "用户名: a", "IP: 1.1.1.1", "", "说明行"],
         )
 
-    def test_consecutive_indented_lines_stay_top_level(self):
-        """企微 markdown 不支持嵌套列表：连续明细行必须是一级列表项。"""
+    def test_no_list_markers_generated(self):
+        """企微 markdown 不支持列表语法：明细行不得生成 "- " 标记。"""
         out = _markdown_body_from_plain("2026-01-01 12:00:00\n\t影片1 · a.mkv\n\t影片2 · b.mkv")
         self.assertEqual(
             out.splitlines(),
-            ["2026-01-01 12:00:00", "- 影片1 · a.mkv", "- 影片2 · b.mkv"],
+            ["2026-01-01 12:00:00", "影片1 · a.mkv", "影片2 · b.mkv"],
         )
 
     def test_ellipsis_line_kept_separate(self):
@@ -328,12 +331,12 @@ class TestMarkdownConversionUnit(unittest.TestCase):
         self.assertEqual(_markdown_body_from_plain(None), "")
 
     def test_message_merged_markdown_prefers_markdown_field(self):
-        msg = MultiPlatformMessage(title="T", content="用户名: a", markdown="- 用户名: a")
-        self.assertEqual(msg.merged_markdown(), "## T\n\n- 用户名: a")
+        msg = MultiPlatformMessage(title="T", content="用户名: a", markdown="用户名: a")
+        self.assertEqual(msg.merged_markdown(), "## T\n\n用户名: a")
 
     def test_message_merged_markdown_falls_back_to_content(self):
         msg = MultiPlatformMessage(title="T", content="用户名: a")
-        self.assertEqual(msg.merged_markdown(), "## T\n\n- 用户名: a")
+        self.assertEqual(msg.merged_markdown(), "## T\n\n用户名: a")
 
 
 if __name__ == "__main__":

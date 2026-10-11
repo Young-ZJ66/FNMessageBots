@@ -254,45 +254,26 @@ def _truncate_bytes(text: str, max_bytes: int, suffix: str = TRUNCATE_SUFFIX) ->
 
 
 def _markdown_body_from_plain(text: str) -> str:
-    """把纯文本正文转成 markdown：缩进行转列表项，「键: 值」行也转列表项。
+    """把纯文本正文转成 markdown 结构。只做两件事：
 
-    企业微信群机器人 markdown 不支持缩进对齐（空白会被吃掉、原文会连成一坨），
-    因此统一把有缩进或「键: 值」的行转成 `- ` 列表项；同时为被列表项包裹的续行补两个空格，
-    避免「… 其余 N 条」这类说明行在渲染时被并入上一条。
-    「【组名】」分组标题行转成加粗，只做行结构与列表标记转换，不改写任何业务文案。
+    1. 「【组名】」分组标题行转加粗；
+    2. 去除行首缩进（企微 markdown 会吃掉空白，缩进没有意义）。
+
+    刻意**不生成列表标记**：企微群机器人 markdown 不支持列表语法，
+    "- " 会原样显示为字符；明细行直接换行即可正确分行。
     """
     out_lines: List[str] = []
-    prev_is_item = False
     for raw in str(text or "").split("\n"):
         stripped = raw.strip()
         if not stripped:
             out_lines.append("")
-            prev_is_item = False
             continue
-        indented = raw[:1] in (" ", "\t")
-        m = re.match(r"^([^:：]{1,24})[:：][ \t]+(\S.*)$", stripped)
         group_m = re.match(r"^【(.+?)】$", stripped)
         if group_m:
-            line = f"**{group_m.group(1).strip()}**"
-            prev_is_item = False
-        elif m and not m.group(1).strip().startswith(("-", "*", "#")):
-            line = f"- {m.group(1).strip()}: {m.group(2)}"
-            prev_is_item = True
-        elif indented or re.match(r"^\d+[.)]\s+\S", stripped):
-            # 企微/钉钉 markdown 不支持嵌套列表，连续明细行统一为一级列表项
-            line = f"- {stripped}"
-            prev_is_item = True
+            out_lines.append(f"**{group_m.group(1).strip()}**")
         else:
-            line = f"  {stripped}" if (prev_is_item and line_needs_continuation(stripped)) else stripped
-            if line == stripped:
-                prev_is_item = False
-        out_lines.append(line)
+            out_lines.append(stripped)
     return "\n".join(out_lines).strip("\n")
-
-
-def line_needs_continuation(stripped: str) -> bool:
-    """以省略号开头的说明行在 markdown 里会被并入上一条列表项，需补缩进单独成段。"""
-    return stripped.startswith("…") or stripped.startswith("...")
 
 
 def _feishu_post_content(title: str, body: str, *, max_segments: int = 400) -> Dict[str, Any]:

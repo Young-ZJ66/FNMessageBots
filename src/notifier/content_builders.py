@@ -120,8 +120,8 @@ class ContentBuildersMixin:
     ) -> Tuple[str, str, str]:
         """构建消息的三段结构：(时间行, 明细正文, 备注文案)。
 
-        纯文本渠道由 _build_content 顺序拼接；markdown 渲染层据此分层摆放——
-        时间与备注（概要）留在引用块外，明细正文（键值/列表）整体收进「>」引用块。
+        时间行带「时间: 」前缀。纯文本渠道由 _build_content 顺序拼接；
+        markdown 渲染层把时间行与明细正文整体收进「>」引用块，概要留在外面。
         for_batch_inner=True 时用于多事件汇总内的子块：无时间行、无备注。
         """
         # 批量汇总：多条时整段在入口处理（仅一条时间行 + 子块无时间/无备注）
@@ -137,10 +137,10 @@ class ContentBuildersMixin:
                     for_batch_inner=False,
                 )
             body = self._build_poll_batch_summary_content(event_data)
-            return (str(timestamp), self._strip_body_emojis(body), "")
+            return (f"时间: {timestamp}", self._strip_body_emojis(body), "")
 
         if event_type == "NAS_PATROL_REPORT":
-            return (str(timestamp), self._strip_body_emojis(self._build_nas_patrol_content(event_data)), "")
+            return (f"时间: {timestamp}", self._strip_body_emojis(self._build_nas_patrol_content(event_data)), "")
 
         fragments: List[str] = []
         if not for_batch_inner:
@@ -235,7 +235,7 @@ class ContentBuildersMixin:
         note = ""
         if not for_batch_inner and event_type != "NAS_PATROL_REPORT":
             note = self.EVENT_NOTES.get(event_type, '')
-        ts_line = str(timestamp) if not for_batch_inner else ""
+        ts_line = f"时间: {timestamp}" if not for_batch_inner else ""
         return (ts_line, body, note)
 
     def _build_content(
@@ -1079,19 +1079,19 @@ class ContentBuildersMixin:
             }
             trim_bits: List[str] = []
             if title:
-                trim_bits.append(title)
+                trim_bits.append(f"片名: {title}")
             elif filename:
-                trim_bits.append(filename)
+                trim_bits.append(f"文件: {filename}")
             if item_type:
-                trim_bits.append(type_map.get(item_type, item_type))
+                trim_bits.append(f"类型: {type_map.get(item_type, item_type)}")
             if season_number not in (None, "", 0) and episode_number not in (None, "", 0):
-                trim_bits.append(f"第{season_number}季{episode_number}集")
+                trim_bits.append(f"集数: 第{season_number}季{episode_number}集")
             elif episode_number not in (None, "", 0):
-                trim_bits.append(f"第{episode_number}集")
+                trim_bits.append(f"集数: 第{episode_number}集")
             elif season_number not in (None, "", 0):
-                trim_bits.append(f"第{season_number}季")
+                trim_bits.append(f"集数: 第{season_number}季")
             if filename and title and filename != title:
-                trim_bits.append(filename)
+                trim_bits.append(f"文件: {filename}")
             return [" · ".join(trim_bits)[:200]] if trim_bits else [et]
 
         if et in ("MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT", "MEDIA_USER_CREATED"):

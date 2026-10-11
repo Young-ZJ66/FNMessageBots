@@ -48,7 +48,6 @@ from .message_format import (
     _truncate_bytes,
     _truncate_chars,
     _truncate_utf8,
-    line_needs_continuation,
     normalize_disk_io_payload,
     reset_rich_text_rejected_channels,
     rich_text_rejected_channels,

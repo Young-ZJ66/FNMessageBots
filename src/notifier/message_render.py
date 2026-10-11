@@ -75,11 +75,12 @@ class MessageRenderMixin:
         timestamp: str,
         raw_log: str,
     ) -> str:
-        """生成 markdown 正文：概要在明处、明细整体收进「>」引用块。
+        """生成 markdown 正文：概要在引用块外，时间与明细整体收进「>」引用块。
 
-        版式（引用块外 → 引用块内）：
-            时间行 + 备注概要（EVENT_NOTES，紧随时间之后）
-            明细正文（键值/列表，逐行加「>」前缀；空行保持引用块连续）
+        版式：
+            概要（EVENT_NOTES）留在引用块外；
+            引用块内首行为「时间: …」，其后为明细行（纯文本行，无列表标记——
+            企微 markdown 不支持列表，"- " 会原样显示为字符）。
         不做二次业务渲染，避免主文案与结构化文案出现信息差异。
         """
         try:
@@ -87,17 +88,17 @@ class MessageRenderMixin:
         except Exception:
             return ""
         segments: List[str] = []
-        if ts_line:
-            segments.append(self._clean_text(ts_line))
         if note:
             segments.append(self._clean_text(note))
+        quote_parts: List[str] = []
+        if ts_line:
+            quote_parts.append(self._clean_text(ts_line))
         if body.strip():
-            # 注意：正文不能过 _clean_text（其整体 strip 会吃掉首行缩进，破坏列表项识别），
-            # 用逐行去图标、保留缩进的 _strip_body_emojis
+            # 正文不能过 _clean_text（整体 strip 会吃掉行首结构），逐行去图标即可
             quoted = _markdown_body_from_plain(self._strip_body_emojis(body))
-            if quoted.strip():
-                quote_lines = [f"> {ln}" if ln.strip() else ">" for ln in quoted.split("\n")]
-                segments.append("\n".join(quote_lines))
+            quote_parts.extend(ln for ln in quoted.split("\n"))
+        if quote_parts:
+            segments.append("\n".join(f"> {ln}" if ln.strip() else ">" for ln in quote_parts))
         return "\n\n".join(segments)
 
     def _disk_minimal_label(self, disk_info: Dict[str, Any]) -> str:
