@@ -1,0 +1,148 @@
+# 在 GitHub 服务器上构建镜像，飞牛 NAS 直接拉取部署。
+#
+# 为什么在 GitHub 构建：**GitHub 运行器在海外，直连 Docker Hub 拉 python:3.11-slim
+# 不会超时**，所以本地/飞牛常见的「拉基础镜像卡住」在这里不存在，也不需要配国内镜像源。
+#
+# 推送目标：GitHub Container Registry（ghcr.io），使用 Actions 内置 GITHUB_TOKEN，
+# **无需配置任何 Secret**。
+#
+# ⚠️ GHCR 的包首次推送后默认是**私有**的。要让飞牛免登录拉取，需到
+#    GitHub → 头像 → Packages → 选中该镜像 → Package settings → Change visibility → Public。
+#    （也可不改成公开，改为在 NAS 上 docker login ghcr.io，见 README 部署说明。）
+#
+# ⚠️ 若飞牛只能拉 Docker Hub：在仓库 Settings → Secrets and variables → Actions 里
+#    添加 DOCKERHUB_USERNAME 与 DOCKERHUB_TOKEN（用 Access Token，不是登录密码），
+#    本 workflow 会自动把已构建好的镜像**复制**一份到 Docker Hub（不重新构建）。
+#
+# ⚠️ 容器镜像名必须全小写，而仓库名 FNMessageBots 含大写，故下面用 ${VAR,,} 转小写，
+#    不能直接用 github.repository（否则推送失败）。
+
+name: Build and Push Image
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: '目标架构（飞牛 NAS 用 linux/amd64；需多架构则填 linux/amd64,linux/arm64）'
+        required: true
+        default: 'linux/amd64'
+      push_latest:
+        description: '是否同时打上 latest 标签'
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # 分支构建默认打 latest；手动触发时由 push_latest 决定
+      WANT_LATEST: ${{ github.event_name != 'workflow_dispatch' || inputs.push_latest }}
+      # 单个平台时才需要 QEMU
+      PLATFORMS: ${{ inputs.platforms || 'linux/amd64' }}
+      # 引用 Secret 后再判断（GitHub 不允许在 if 中直接引用 secrets）
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 全小写镜像名：github.repository 可能是 Young-ZJ66/FNMessageBots
+      - name: Compute image name
+        id: names
+        run: |
+          set -euo pipefail
+          REPO_LC="${GITHUB_REPOSITORY,,}"
+          echo "repo_lc=${REPO_LC}" >> "$GITHUB_OUTPUT"
+          echo "ghcr=ghcr.io/${REPO_LC}" >> "$GITHUB_OUTPUT"
+          if [ -n "${DOCKERHUB_USERNAME:-}" ]; then
+            echo "dockerhub=${DOCKERHUB_USERNAME}/${REPO_LC##*/}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "目标镜像: ghcr.io/${REPO_LC}  架构: ${PLATFORMS}"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up QEMU
+        if: ${{ contains(env.PLATFORMS, 'arm64') }}
+        uses: docker/setup-qemu-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        if: env.DOCKERHUB_TOKEN != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
+      # 用 metadata-action 生成标签与 OCI 标签：手写条件表达式容易产出空 --tag 导致构建失败
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.names.outputs.ghcr }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+            type=raw,value=r${{ github.run_number }}
+            type=raw,value=latest,enable=${{ env.WANT_LATEST }}
+          labels: |
+            org.opencontainers.image.title=FNMessageBots
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and push to GHCR
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 已构建的镜像直接跨仓库复制到 Docker Hub，不重新构建（省时间，且保证两者内容一致）
+      - name: Mirror to Docker Hub
+        if: env.DOCKERHUB_TOKEN != ''
+        run: |
+          set -euo pipefail
+          DH="${{ steps.names.outputs.dockerhub }}"
+          SRC="${{ steps.names.outputs.ghcr }}"
+          for tag in $(echo "${{ steps.meta.outputs.tags }}" | sed "s#^${SRC}:##"); do
+            docker buildx imagetools create -t "${DH}:${tag}" "${SRC}:${tag}"
+          done
+          echo "已复制到 ${DH}"
+
+      - name: Summary
+        run: |
+          {
+            echo "## 构建完成"
+            echo ""
+            echo "- 提交：\`${GITHUB_SHA}\`"
+            echo "- 架构：\`${PLATFORMS}\`"
+            echo "- 镜像：\`${{ steps.meta.outputs.tags }}\`"
+            echo ""
+            echo "飞牛 NAS 的 docker-compose.yml："
+            echo '```yaml'
+            echo "image: ${{ steps.names.outputs.ghcr }}:latest"
+            echo '```'
+            echo ""
+            echo "然后 \`docker compose pull && docker compose up -d\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -38,6 +38,22 @@ logs/
 *.swp
 *.swo
 
+# AI 编码助手 / Agent 相关的本地文件（与项目无关，不提交）
+.claude/
+.cursor/
+.windsurf/
+.continue/
+.aider*
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+QODER.md
+.mcp.json
+*.mcp.json
+mcp.json
+skills/
+.github/copilot-instructions.md
+
 # OS
 .DS_Store
 Thumbs.db
@@ -49,3 +65,6 @@ Thumbs.db
 config/*.json
 !config/config.json
 config/.setup_code
+
+# Test scratch data
+tests/_tmp/
