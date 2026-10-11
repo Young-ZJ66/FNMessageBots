@@ -22,7 +22,7 @@ def show_statistics(storage: LogStorage):
     stats = storage.get_statistics()
     
     print("=" * 50)
-    print("📊 日志存储统计信息")
+    print("日志存储统计信息")
     print("=" * 50)
     print(f"总记录数: {stats.get('total_records', 0)}")
     print(f"最近24小时记录: {stats.get('records_last_day', 0)}")
@@ -30,7 +30,7 @@ def show_statistics(storage: LogStorage):
     print(f"存储位置: {stats.get('storage_path', 'Unknown')}")
     print()
     
-    print("📈 事件类型分布:")
+    print("事件类型分布:")
     event_dist = stats.get('event_distribution', {})
     if event_dist:
         for event_type, count in sorted(event_dist.items(), key=lambda x: x[1], reverse=True):
@@ -45,7 +45,7 @@ def show_recent_logs(storage: LogStorage, hours: int = 24):
     logs = storage.get_recent_logs(hours)
     
     print("=" * 80)
-    print(f"🕒 最近 {hours} 小时的日志记录 (共 {len(logs)} 条)")
+    print(f"最近 {hours} 小时的日志记录 (共 {len(logs)} 条)")
     print("=" * 80)
     
     if not logs:
@@ -68,7 +68,7 @@ def show_logs_by_event_type(storage: LogStorage, event_type: str, limit: int = 1
     logs = storage.get_logs_by_event_type(event_type, limit)
     
     print("=" * 80)
-    print(f"🏷️  事件类型 '{event_type}' 的日志记录 (最多显示 {limit} 条)")
+    print(f"事件类型 '{event_type}' 的日志记录 (最多显示 {limit} 条)")
     print("=" * 80)
     
     if not logs:
