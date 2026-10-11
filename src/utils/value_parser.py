@@ -21,3 +21,21 @@ def as_bool(value: Any, default: bool = False) -> bool:
             return False
         return default
     return bool(value)
+
+
+def as_int(value: Any, default: int = 0) -> int:
+    """稳健整数解析：兼容数字/数字字符串；解析失败返回 default。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default

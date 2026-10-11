@@ -11,6 +11,8 @@ import sys
 import threading
 from pathlib import Path
 from utils.value_parser import as_bool
+from utils.value_parser import as_int as _as_int
+from version import APP_VERSION
 
 # 直接运行本文件时（python src/web/ui_app.py），把 src 加入 path 以便导入 notifier 等
 if __name__ == "__main__":
@@ -52,6 +54,15 @@ from web.config_store import restore_masked_channels as _restore_masked_channels
 
 # 运行中的主监控应用，供「立即巡检」等接口使用
 _runtime_monitor_app = None
+
+# 内置测试消息：Web 页「发送测试消息」一键发送，无需用户输入内容
+BUILT_IN_TEST_MESSAGE = "FnMessageBot 测试推送。收到本条即说明渠道配置与网络可用；实际推送样式以真实事件为准。"
+
+
+def resolve_test_push_content(payload: dict | None) -> str:
+    """测试推送内容：优先用户显式传入；缺省使用内置测试消息。"""
+    payload = payload or {}
+    return (payload.get("content") or "").strip() or BUILT_IN_TEST_MESSAGE
 
 
 def set_runtime_monitor_app(app) -> None:
@@ -582,7 +593,7 @@ def create_app(on_config_saved=None) -> Flask:
         data = {
             "title": "FnMessageBot",
             "subtitle": "飞牛日志消息推送机器人",
-            "version": "2.6.0",
+            "version": APP_VERSION,
             "events_by_category": events_by_category,
             "third_party_events_by_category": third_party_events_by_category,
             "selected_events": monitor_events,
@@ -596,9 +607,10 @@ def create_app(on_config_saved=None) -> Flask:
             "dnd_start_time": (raw.get("dnd_start_time") or "22:00").strip(),
             "dnd_end_time": (raw.get("dnd_end_time") or "07:00").strip(),
             "poll_batch_summary_enabled": as_bool(raw.get("poll_batch_summary_enabled", False), False),
+            "media_batch_summary_enabled": as_bool(raw.get("media_batch_summary_enabled", True), True),
+            "media_batch_window": _as_int(raw.get("media_batch_window", 90), 90),
             "minimal_push_enabled": as_bool(raw.get("minimal_push_enabled", False), False),
             "push_markdown_enabled": as_bool(raw.get("push_markdown_enabled", True), True),
-            "push_emoji_enabled": as_bool(raw.get("push_emoji_enabled", False), False),
             "ssh_ignore_loopback": as_bool(raw.get("ssh_ignore_loopback", False), False),
             "nas_patrol_enabled": as_bool(raw.get("nas_patrol_enabled", False), False),
             "nas_patrol_cron": _cron,
@@ -627,9 +639,10 @@ def create_app(on_config_saved=None) -> Flask:
         dnd_start_time = (payload.get("dnd_start_time") or "22:00").strip()
         dnd_end_time = (payload.get("dnd_end_time") or "07:00").strip()
         poll_batch_summary_enabled = as_bool(payload.get("poll_batch_summary_enabled", False), False)
+        media_batch_summary_enabled = as_bool(payload.get("media_batch_summary_enabled", True), True)
+        media_batch_window = _as_int(payload.get("media_batch_window", 90), 90)
         minimal_push_enabled = as_bool(payload.get("minimal_push_enabled", False), False)
         push_markdown_enabled = as_bool(payload.get("push_markdown_enabled", True), True)
-        push_emoji_enabled = as_bool(payload.get("push_emoji_enabled", False), False)
         ssh_ignore_loopback = as_bool(payload.get("ssh_ignore_loopback", False), False)
         nas_patrol_enabled = as_bool(payload.get("nas_patrol_enabled", False), False)
         nas_patrol_cron = (payload.get("nas_patrol_cron") or "").strip()
@@ -747,9 +760,10 @@ def create_app(on_config_saved=None) -> Flask:
                 "dnd_start_time": dnd_start_time,
                 "dnd_end_time": dnd_end_time,
                 "poll_batch_summary_enabled": poll_batch_summary_enabled,
+                "media_batch_summary_enabled": media_batch_summary_enabled,
+                "media_batch_window": media_batch_window,
                 "minimal_push_enabled": minimal_push_enabled,
                 "push_markdown_enabled": push_markdown_enabled,
-                "push_emoji_enabled": push_emoji_enabled,
                 "ssh_ignore_loopback": ssh_ignore_loopback,
                 "nas_patrol_enabled": nas_patrol_enabled,
                 "nas_patrol_cron": nas_patrol_cron,
@@ -790,9 +804,8 @@ def create_app(on_config_saved=None) -> Flask:
     def test_push():
         try:
             payload = request.get_json(silent=True) or {}
-            content = (payload.get("content") or "").strip()
-            if not content:
-                return jsonify({"ok": False, "message": "请输入要测试的内容。"}), 400
+            # 内置测试消息：页面不再要求用户输入；保留 content 参数仅为兼容旧调用方
+            content = resolve_test_push_content(payload)
 
             raw = _load_raw_config()
             notifier = _build_notifier_from_raw(raw)
@@ -802,7 +815,7 @@ def create_app(on_config_saved=None) -> Flask:
                 content,
                 {
                     "hostname": socket.gethostname(),
-                    "version": "2.6.0",
+                    "version": APP_VERSION,
                 },
             )
             ok = out.get("success", False) if isinstance(out, dict) else bool(out)
@@ -926,6 +939,7 @@ def create_app(on_config_saved=None) -> Flask:
             repo_url=PROJECT_REPO_URL,
             docs_url=PROJECT_DOCS_URL,
             footer_text=FOOTER_TEXT,
+            version=APP_VERSION,
         )
 
 

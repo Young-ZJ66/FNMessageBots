@@ -38,8 +38,11 @@
       backdrop-filter: blur(10px);
     }
     .header {
-      text-align: center;
-      margin-bottom: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
       position: relative;
     }
     .theme-switcher {
@@ -58,7 +61,7 @@
       gap: 6px;
     }
     .theme-btn {
-      width: 30px;
+      min-width: 30px;
       height: 30px;
       border-radius: 999px;
       border: 1px solid #d1d5db;
@@ -68,9 +71,9 @@
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      font-size: 14px;
+      font-size: 12px;
       line-height: 1;
-      padding: 0;
+      padding: 0 10px;
       transition: background-color .15s, border-color .15s, color .15s, transform .05s;
     }
     .theme-btn:hover {
@@ -85,32 +88,33 @@
     .header-brand {
       display: inline-flex;
       align-items: center;
-      justify-content: center;
       gap: 10px;
-      margin-bottom: 6px;
+      min-width: 0;
     }
     .app-icon {
-      width: 34px;
-      height: 34px;
+      width: 30px;
+      height: 30px;
       object-fit: cover;
       flex-shrink: 0;
+      border-radius: 8px;
     }
     .header-title {
-      font-size: 28px;
+      font-size: 19px;
       font-weight: 700;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.02em;
       color: #111827;
-      margin-bottom: 0;
-      display: block;
-    }
-    .header-sub {
-      font-size: 14px;
-      color: #6b7280;
-      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .header-ver {
-      font-size: 13px;
-      color: #9ca3af;
+      font-size: 12px;
+      color: #6b7280;
+      background: #f3f4f6;
+      border: 1px solid #e5e7eb;
+      border-radius: 999px;
+      padding: 2px 9px;
+      flex-shrink: 0;
     }
     .stats-section { margin-bottom: 16px; }
     .stats-grid {
@@ -167,6 +171,27 @@
       color: #9ca3af;
     }
     .events-by-category { max-height: 420px; overflow: auto; padding-right: 4px; }
+    .event-anchor-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .event-anchor-chip {
+      border: 1px solid #e5e7eb;
+      background: #fff;
+      color: #4b5563;
+      font-size: 12px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    .event-anchor-chip:hover {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+      color: #1d4ed8;
+    }
     .event-category { margin-bottom: 22px; }
     .event-category-title {
       font-size: 15px; font-weight: 650; color: #111827;
@@ -175,6 +200,27 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
+    }
+    .event-cat-collapse {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .event-cat-collapse .chevron {
+      display: inline-block;
+      font-size: 11px;
+      color: #9ca3af;
+      transition: transform .15s;
+    }
+    .event-category.collapsed .chevron { transform: rotate(-90deg); }
+    .event-category.collapsed .events-grid { display: none; }
+    .event-cat-count {
+      font-size: 11px;
+      font-weight: 400;
+      color: #6b7280;
+      margin-right: 10px;
     }
     .events-grid {
       display: grid;
@@ -208,6 +254,11 @@
     .event-item .field-helper {
       margin-top: 4px;
       margin-bottom: 0;
+      /* 事件卡片副标题保持紧凑：最多两行，超出省略 */
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }
     .tag {
       display: inline-flex;
@@ -398,6 +449,27 @@
       gap: 10px;
       margin-top: 16px;
     }
+    .save-bar {
+      position: sticky;
+      bottom: 0;
+      z-index: 30;
+      align-items: center;
+      padding: 10px 0 8px;
+      background: linear-gradient(to top, rgba(255, 255, 255, 0.97) 70%, rgba(255, 255, 255, 0));
+      backdrop-filter: blur(3px);
+    }
+    .save-dirty-hint {
+      display: none;
+      align-items: center;
+      font-size: 12px;
+      color: #b45309;
+      background: #fef3c7;
+      border: 1px solid #fde68a;
+      border-radius: 999px;
+      padding: 3px 10px;
+    }
+    .save-bar.is-dirty .save-dirty-hint { display: inline-flex; }
+    .save-bar.is-dirty .btn-primary { box-shadow: 0 6px 18px rgba(37, 99, 235, 0.35); }
     .home-footer {
       margin-top: 24px;
       padding-top: 20px;
@@ -445,11 +517,8 @@
       font-size: 11px;
       color: #9ca3af;
       margin-top: 2px;
-      /* 推送事件副标题：最多展示两行，超出打点省略 */
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
+      /* 说明文字完整展示：不得截断（含 frp 内网穿透等安全警告） */
+      line-height: 1.6;
     }
     .test-section {
       margin-top: 20px;
@@ -564,29 +633,23 @@
         max-width: 100%;
       }
       .theme-switcher {
-        position: absolute;
-        top: -2px;
-        right: 0;
-        justify-content: flex-end;
-        width: auto;
-        margin-bottom: 0;
+        flex-shrink: 0;
       }
       .theme-switcher span { display: none; }
       .theme-buttons { gap: 4px; }
-      .theme-btn { width: 28px; height: 28px; font-size: 13px; }
-      .header { margin-bottom: 16px; }
-      .header-brand { gap: 8px; margin-bottom: 4px; padding-right: 74px; }
-      .app-icon { width: 30px; height: 30px; }
+      .theme-btn { min-width: 28px; height: 28px; font-size: 11px; padding: 0 8px; }
+      .header { margin-bottom: 14px; }
+      .header-brand { gap: 8px; }
+      .app-icon { width: 26px; height: 26px; }
       .header-title {
-        font-size: 22px;
+        font-size: 17px;
         letter-spacing: 0.02em;
-        max-width: calc(100vw - 130px);
+        max-width: calc(100vw - 150px);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .header-sub { font-size: 13px; }
-      .header-ver { font-size: 12px; }
+      .header-ver { font-size: 11px; padding: 1px 8px; }
       .section { padding: 12px; margin-bottom: 12px; }
       .section-title { font-size: 14px; margin-bottom: 8px; }
       .events-by-category { max-height: none; }
@@ -648,14 +711,36 @@
       color: #e5e7eb;
       border-bottom-color: #374151;
     }
+    html[data-theme="dark"] .event-anchor-chip {
+      background: #111827;
+      border-color: #374151;
+      color: #d1d5db;
+    }
+    html[data-theme="dark"] .event-anchor-chip:hover {
+      background: #1e3a5f;
+      border-color: #2563eb;
+      color: #fff;
+    }
+    html[data-theme="dark"] .event-cat-count { color: #9ca3af; }
+    html[data-theme="dark"] .save-bar {
+      background: linear-gradient(to top, rgba(17, 24, 39, 0.97) 70%, rgba(17, 24, 39, 0));
+    }
+    html[data-theme="dark"] .save-dirty-hint {
+      background: #451a03;
+      border-color: #92400e;
+      color: #fde68a;
+    }
     html[data-theme="dark"] .dnd-section,
     html[data-theme="dark"] .nas-patrol-section {
       border-top-color: #374151;
     }
     html[data-theme="dark"] .stats-label { color: #d1d5db; }
     html[data-theme="dark"] .event-item span { color: #e5e7eb; }
-    html[data-theme="dark"] .header-sub,
-    html[data-theme="dark"] .header-ver,
+    html[data-theme="dark"] .header-ver {
+      background: #111827;
+      border-color: #374151;
+      color: #9ca3af;
+    }
     html[data-theme="dark"] .field-label,
     html[data-theme="dark"] .field-helper,
     html[data-theme="dark"] .theme-switcher {
@@ -832,17 +917,16 @@
   <div id="app-main" class="page" style="display:none;">
     <div class="card">
       <div class="header">
-        <div class="theme-switcher">
-          <button type="button" class="theme-btn" id="theme-toggle-btn" title="切换到深色模式" aria-label="切换到深色模式">🌙</button>
-        </div>
         <div class="header-brand">
           {% if icon_url %}
           <img class="app-icon" src="{{ icon_url }}" alt="FnMessageBot" />
           {% endif %}
           <div class="header-title" id="app-title">FnMessageBot</div>
+          <div class="header-ver" id="app-version">{{ version }}</div>
         </div>
-        <div class="header-sub" id="app-subtitle">飞牛日志消息推送机器人</div>
-        <div class="header-ver" id="app-version">2.6.0</div>
+        <div class="theme-switcher">
+          <button type="button" class="theme-btn" id="theme-toggle-btn" title="切换到深色模式" aria-label="切换到深色模式">深色</button>
+        </div>
       </div>
 
       <div class="section stats-section">
@@ -874,8 +958,9 @@
 
       <div class="section">
         <div class="section-title">
-          <span>事件选择 <small>请选择需要监控并推送的事件</small></span>
+          <span>事件选择 <small>请选择需要监控并推送的事件；点击分组标题可折叠/展开</small></span>
         </div>
+        <div class="event-anchor-bar" id="events-anchor-bar"></div>
         <div class="events-by-category" id="events-container"></div>
       </div>
 
@@ -966,10 +1051,18 @@
           </div>
           <div>
             <div class="field-label" style="display: flex; align-items: center; gap: 8px;">
-              <input type="checkbox" id="input-push-emoji-enabled" />
-              <span>推送文案保留图标</span>
+              <input type="checkbox" id="input-media-batch-enabled" />
+              <span>影视/相册事件聚合推送</span>
             </div>
-            <div class="field-helper">默认关闭：推送标题与正文不显示 emoji 等装饰性图标，保持文案简洁。</div>
+            <div class="field-helper">开启后，影视入库、相册分享等高频同类事件在静默窗口内合并为一条结构化消息，批量刮削入库不再刷屏。</div>
+            <div class="system-grid" style="grid-template-columns: 1fr 1fr; margin-top: 8px;">
+              <div>
+                <div class="field-label">聚合静默窗口（秒）</div>
+                <input id="input-media-batch-window" type="number" min="0" max="3600" step="10" />
+                <div class="field-helper">窗口内无新事件才发送；0 表示按轮询轮次立即发送。</div>
+              </div>
+              <div></div>
+            </div>
           </div>
           <div>
             <div class="field-label" style="display: flex; align-items: center; gap: 8px;">
@@ -1017,18 +1110,18 @@
         </div>
       </div>
 
-      <div class="footer-actions">
+      <div class="footer-actions save-bar">
+        <span class="save-dirty-hint" id="save-dirty-hint">有未保存的更改</span>
         <button class="btn btn-primary" id="save-btn" type="button">保存配置</button>
       </div>
       <div id="warning-panel" class="warning-panel"></div>
 
       <div class="section test-section">
         <div class="section-title">
-          <span>测试推送 <small>保存成功后，可发送测试消息验证渠道是否配置正确（PS:发送不成功，尝试一下保存配置）</small></span>
+          <span>测试推送 <small>点击即发送内置测试消息，验证渠道配置是否正确；发送失败时可先保存配置再重试。</small></span>
         </div>
-        <textarea id="test-content" placeholder="请输入要发送的测试内容，例如：这是一条 FnMessageBot 配置测试消息。"></textarea>
         <div class="footer-actions" style="margin-top: 10px;">
-          <button class="btn btn-ghost" id="test-btn" type="button" disabled>发送测试</button>
+          <button class="btn btn-ghost" id="test-btn" type="button" disabled>发送测试消息</button>
         </div>
         <div class="status-bar" id="status-bar"></div>
       </div>
@@ -1064,11 +1157,11 @@
       document.documentElement.setAttribute("data-theme", resolved);
       if (!themeToggleBtn) return;
       if (resolved === "dark") {
-        themeToggleBtn.textContent = "☀";
+        themeToggleBtn.textContent = "浅色";
         themeToggleBtn.title = "切换到浅色模式";
         themeToggleBtn.setAttribute("aria-label", "切换到浅色模式");
       } else {
-        themeToggleBtn.textContent = "🌙";
+        themeToggleBtn.textContent = "深色";
         themeToggleBtn.title = "切换到深色模式";
         themeToggleBtn.setAttribute("aria-label", "切换到深色模式");
       }
@@ -1096,9 +1189,34 @@
     const nasPatrolRunBtn = document.getElementById("nas-patrol-run-btn");
     const statusBar = document.getElementById("status-bar");
     const warningPanel = document.getElementById("warning-panel");
+    const appMainEl = document.getElementById("app-main");
+    if (appMainEl) {
+      appMainEl.addEventListener("change", markConfigDirty, true);
+      appMainEl.addEventListener("input", markConfigDirty, true);
+    }
 
     let channelOptions = [];
     const fetchOpts = { credentials: "include" };
+
+    // 未保存更改跟踪：任意表单交互即标记（测试推送区除外）；保存成功后清除
+    let configDirty = false;
+    function markConfigDirty(e) {
+      if (e && e.target && e.target.closest && e.target.closest(".test-section")) return;
+      if (configDirty) return;
+      configDirty = true;
+      const bar = document.querySelector(".save-bar");
+      if (bar) bar.classList.add("is-dirty");
+    }
+    function clearConfigDirty() {
+      configDirty = false;
+      const bar = document.querySelector(".save-bar");
+      if (bar) bar.classList.remove("is-dirty");
+    }
+    window.addEventListener("beforeunload", (e) => {
+      if (!configDirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
 
     let setupRequiresCode = false;
     let passwordMinLength = 8;
@@ -1668,18 +1786,39 @@
       channelsBody.appendChild(tr);
     }
 
-    function renderEventCategories(container, categories, selected) {
+    function renderEventCategories(container, categories, selected, anchorBar) {
       if (!container) return;
       container.innerHTML = "";
+      if (anchorBar) anchorBar.innerHTML = "";
+      const anchorChips = [];
       for (const cat of categories || []) {
         const catBlock = document.createElement("div");
         catBlock.className = "event-category";
 
         const catHeader = document.createElement("div");
         catHeader.className = "event-category-title";
+
+        // 标题 + 折叠箭头：点击折叠/展开该分组
+        const catCollapse = document.createElement("span");
+        catCollapse.className = "event-cat-collapse";
         const catTitleSpan = document.createElement("span");
         catTitleSpan.textContent = cat.name || "";
-        catHeader.appendChild(catTitleSpan);
+        catCollapse.appendChild(catTitleSpan);
+        const chevron = document.createElement("span");
+        chevron.className = "chevron";
+        chevron.textContent = "▾";
+        catCollapse.appendChild(chevron);
+        const toggleCollapse = () => catBlock.classList.toggle("collapsed");
+        catCollapse.addEventListener("click", toggleCollapse);
+        catHeader.appendChild(catCollapse);
+
+        const catOps = document.createElement("span");
+        catOps.style.display = "inline-flex";
+        catOps.style.alignItems = "center";
+        // 已选计数：随勾选实时更新
+        const catCount = document.createElement("span");
+        catCount.className = "event-cat-count";
+        catOps.appendChild(catCount);
 
         const catToggleLabel = document.createElement("label");
         catToggleLabel.style.fontSize = "13px";
@@ -1692,7 +1831,8 @@
         const catToggleText = document.createElement("span");
         catToggleText.textContent = "全选";
         catToggleLabel.appendChild(catToggleText);
-        catHeader.appendChild(catToggleLabel);
+        catOps.appendChild(catToggleLabel);
+        catHeader.appendChild(catOps);
 
         catBlock.appendChild(catHeader);
 
@@ -1701,11 +1841,13 @@
 
         function updateCatToggle() {
           const boxes = grid.querySelectorAll("input[type=checkbox]");
+          const checkedCount = Array.from(boxes).filter(b => b.checked).length;
           if (!boxes.length) {
             catToggle.checked = false;
-            return;
+          } else {
+            catToggle.checked = checkedCount === boxes.length;
           }
-          catToggle.checked = Array.from(boxes).every(b => b.checked);
+          catCount.textContent = `已选 ${checkedCount}/${boxes.length}`;
         }
 
         for (const ev of cat.events || []) {
@@ -1741,7 +1883,27 @@
         updateCatToggle();
         catBlock.appendChild(grid);
         container.appendChild(catBlock);
+
+        // 锚点：点击滚动容器到该分组（折叠状态先展开）
+        if (anchorBar) {
+          const chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = "event-anchor-chip";
+          chip.textContent = cat.name || "";
+          chip.addEventListener("click", () => {
+            if (catBlock.classList.contains("collapsed")) {
+              catBlock.classList.remove("collapsed");
+            }
+            const top = catBlock.getBoundingClientRect().top
+              - container.getBoundingClientRect().top
+              + container.scrollTop - 4;
+            container.scrollTo({ top, behavior: "smooth" });
+          });
+          anchorBar.appendChild(chip);
+          anchorChips.push(chip);
+        }
       }
+      return anchorChips;
     }
 
     async function loadConfig() {
@@ -1759,7 +1921,6 @@
         renderPersistentWarnings(json.warnings || []);
         const data = json.data;
         document.getElementById("app-title").textContent = data.title || "FnMessageBot";
-        document.getElementById("app-subtitle").textContent = data.subtitle || "";
         document.getElementById("app-version").textContent = data.version || "";
 
         channelOptions = data.channel_options || [];
@@ -1768,7 +1929,7 @@
           typeof data.bark_icon === "string" ? data.bark_icon : "";
 
         const selected = new Set(data.selected_events || []);
-        renderEventCategories(eventsContainer, data.events_by_category || [], selected);
+        renderEventCategories(eventsContainer, data.events_by_category || [], selected, document.getElementById("events-anchor-bar"));
         renderEventCategories(thirdPartyEventsContainer, data.third_party_events_by_category || [], selected);
 
         // 渲染渠道
@@ -1786,9 +1947,10 @@
         document.getElementById("input-poll-interval").value = data.logger_poll_interval || 5;
         document.getElementById("input-resume-from-cursor").checked = !!data.resume_from_cursor_on_start;
         document.getElementById("input-poll-batch-summary").checked = !!data.poll_batch_summary_enabled;
+        document.getElementById("input-media-batch-enabled").checked = data.media_batch_summary_enabled !== false;
+        document.getElementById("input-media-batch-window").value = (data.media_batch_window ?? 90);
         document.getElementById("input-minimal-push-enabled").checked = !!data.minimal_push_enabled;
         document.getElementById("input-push-markdown-enabled").checked = data.push_markdown_enabled !== false;
-        document.getElementById("input-push-emoji-enabled").checked = !!data.push_emoji_enabled;
         document.getElementById("input-ssh-ignore-loopback").checked = !!data.ssh_ignore_loopback;
         document.getElementById("input-title-prefix").value =
           typeof data.title_prefix === "string" ? data.title_prefix : "飞牛NAS";
@@ -1901,9 +2063,13 @@
         resume_from_cursor_on_start: document.getElementById("input-resume-from-cursor").checked,
         title_prefix: (document.getElementById("input-title-prefix").value || "").trim(),
         poll_batch_summary_enabled: document.getElementById("input-poll-batch-summary").checked,
+        media_batch_summary_enabled: document.getElementById("input-media-batch-enabled").checked,
+        media_batch_window: (function () {
+          const v = parseInt(document.getElementById("input-media-batch-window").value, 10);
+          return Number.isFinite(v) ? Math.max(0, Math.min(3600, v)) : 90;
+        })(),
         minimal_push_enabled: document.getElementById("input-minimal-push-enabled").checked,
         push_markdown_enabled: document.getElementById("input-push-markdown-enabled").checked,
-        push_emoji_enabled: document.getElementById("input-push-emoji-enabled").checked,
         ssh_ignore_loopback: document.getElementById("input-ssh-ignore-loopback").checked,
         dnd_enabled: document.getElementById("input-dnd-enabled").checked,
         dnd_start_time: document.getElementById("input-dnd-start").value || "22:00",
@@ -1923,6 +2089,7 @@
         const json = await res.json();
         if (res.ok && json.ok) {
           showToast(true, json.message || "配置已保存");
+          clearConfigDirty();
           if (Array.isArray(json.warnings) && json.warnings.length) {
             json.warnings.forEach(w => showToast(false, "权限告警：" + w));
           }
@@ -1939,18 +2106,13 @@
     });
 
     testBtn.addEventListener("click", async () => {
-      const content = document.getElementById("test-content").value.trim();
-      if (!content) {
-        showToast(false, "请输入测试内容");
-        return;
-      }
       setStatus(false, "正在发送测试消息...");
       try {
         const res = await fetch("api/test", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ content }),
+          body: JSON.stringify({}),
         });
         const text = await res.text();
         let json = null;

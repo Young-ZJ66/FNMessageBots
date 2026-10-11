@@ -130,8 +130,37 @@
     .link { color: #2563eb; cursor: pointer; }
     .link:hover { text-decoration: underline; }
     .more-wrap { margin-top: 14px; text-align: center; }
-    .detail-wrap { margin-top: 20px; padding: 16px; background: #fffbeb; border-radius: 8px; border: 1px solid #fde68a; }
-    .detail-wrap h2 { font-size: 14px; margin: 0 0 8px; }
+    .detail-wrap { margin-top: 20px; padding: 16px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; }
+    .detail-wrap h2 { font-size: 14px; margin: 16px 0 8px; }
+    .detail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    .detail-title { font-weight: 700; font-size: 14px; color: #111827; }
+    .detail-meta { font-size: 12px; color: #6b7280; }
+    .detail-close {
+      margin-left: auto;
+      border: 1px solid #d1d5db;
+      background: #fff;
+      color: #4b5563;
+      font-size: 12px;
+      border-radius: 999px;
+      padding: 3px 12px;
+      cursor: pointer;
+    }
+    .detail-close:hover { background: #f3f4f6; }
+    .detail-summary { font-size: 13px; color: #374151; white-space: pre-wrap; word-break: break-word; line-height: 1.7; }
+    .detail-channel-item { font-size: 12px; line-height: 1.8; word-break: break-word; }
+    .detail-channel-extra { color: #6b7280; margin-left: 6px; }
+    .detail-batch { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .detail-batch th, .detail-batch td {
+      text-align: left;
+      padding: 5px 8px;
+      border-bottom: 1px solid #f3f4f6;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    .detail-batch th { color: #6b7280; font-weight: 500; }
+    .detail-batch-time { white-space: nowrap; color: #6b7280; }
+    tbody tr.clickable { cursor: pointer; }
+    tbody tr.clickable:hover { background: #f9fafb; }
     pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 12px; background: #1f2937; color: #e5e7eb; padding: 12px; border-radius: 6px; }
     .license-footer {
       flex-shrink: 0;
@@ -160,6 +189,13 @@
     html[data-theme="dark"] tbody td.result-fail { color: #f87171; font-weight: 700; }
     html[data-theme="dark"] .empty { color: #9ca3af; }
     html[data-theme="dark"] .detail-wrap { background: #111827; border-color: #374151; }
+    html[data-theme="dark"] .detail-title { color: #f9fafb; }
+    html[data-theme="dark"] .detail-summary { color: #e5e7eb; }
+    html[data-theme="dark"] .detail-meta { color: #9ca3af; }
+    html[data-theme="dark"] .detail-close { background: #111827; border-color: #374151; color: #d1d5db; }
+    html[data-theme="dark"] .detail-close:hover { background: #1f2937; }
+    html[data-theme="dark"] .detail-batch th, html[data-theme="dark"] .detail-batch td { border-bottom-color: #1f2937; }
+    html[data-theme="dark"] tbody tr.clickable:hover { background: #0b1220; }
     html[data-theme="dark"] .license-footer { color: #6b7280; }
     html[data-theme="dark"] .btn-ghost {
       background: #111827;
@@ -206,6 +242,7 @@
       </div>
       <div id="empty" class="empty" style="display:none;">暂无推送记录</div>
       <div class="more-wrap"><button type="button" id="btn-more" class="btn btn-ghost" style="display:none;">加载更多</button></div>
+      <div id="detail-panel" class="detail-wrap" style="display:none;"></div>
   <script>
   var THEME_STORAGE_KEY = "fnmb_theme";
   function applyHistoryTheme() {
@@ -235,6 +272,66 @@
     if (err) parts.push("错误: " + err);
     if (resp) parts.push("返回: " + resp);
     return parts.join("；") || "无返回详情";
+  }
+  var detailPanel = document.getElementById("detail-panel");
+  function closeDetail() {
+    if (!detailPanel) return;
+    detailPanel.style.display = "none";
+    detailPanel.innerHTML = "";
+  }
+  function escHtml(s) {
+    return String(s === null || s === undefined ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function openDetail(id) {
+    if (!detailPanel || !id) return;
+    fetch("api/push-history/" + encodeURIComponent(id), fetchOpts).then(function(r){
+      if (r.status === 401) { window.location.href = "./"; return null; }
+      return r.json();
+    }).then(function(json){
+      if (!json || !json.ok || !json.data) return;
+      var rec = json.data;
+      var detail = rec.detail;
+      if (typeof detail === "string") {
+        try { detail = JSON.parse(detail); } catch (e) { detail = null; }
+      }
+      var html = '<div class="detail-head">';
+      html += '<span class="detail-title">' + escHtml(rec.event_type_label || rec.event_type || "") + '</span>';
+      html += '<span class="detail-meta">' + escHtml(rec.created_at || "") + '</span>';
+      html += '<span class="' + (rec.success ? "result-ok" : "result-fail") + '">' + (rec.success ? "成功" : "失败") + '</span>';
+      html += '<button type="button" class="detail-close" id="detail-close">关闭</button>';
+      html += '</div>';
+      if (rec.summary) html += '<div class="detail-summary">' + escHtml(rec.summary) + '</div>';
+      if (detail && Array.isArray(detail.channel_results) && detail.channel_results.length) {
+        html += '<h2>渠道返回结果</h2>';
+        detail.channel_results.forEach(function(c){
+          c = c || {};
+          var extra = buildChannelExtra(c);
+          html += '<div class="detail-channel-item">' + escHtml(c.channel || "未知渠道") + ': ' + (c.success ? "成功" : "失败")
+            + (extra ? '<span class="detail-channel-extra">' + escHtml(extra) + '</span>' : '') + '</div>';
+        });
+      } else if (detail && detail.failure_summary) {
+        html += '<h2>失败原因</h2><div class="detail-summary">' + escHtml(stringifyDetailValue(detail.failure_summary)) + '</div>';
+      }
+      if (detail && Array.isArray(detail.batch_items) && detail.batch_items.length) {
+        var total = Number(detail.batch_total || detail.batch_items.length) || detail.batch_items.length;
+        var capped = detail.batch_items.length < total;
+        html += '<h2>批次明细（共 ' + total + ' 条' + (capped ? '，仅记录前 ' + detail.batch_items.length + ' 条' : '') + '）</h2>';
+        html += '<table class="detail-batch"><thead><tr><th>#</th><th>时间</th><th>事件类型</th><th>内容</th></tr></thead><tbody>';
+        detail.batch_items.forEach(function(it, idx){
+          it = it || {};
+          html += '<tr><td>' + (idx + 1) + '</td>'
+            + '<td class="detail-batch-time">' + escHtml(it.timestamp || "") + '</td>'
+            + '<td>' + escHtml(it.event_type || "") + '</td>'
+            + '<td>' + escHtml(it.brief || "") + '</td></tr>';
+        });
+        html += '</tbody></table>';
+      }
+      detailPanel.innerHTML = html;
+      detailPanel.style.display = "block";
+      document.getElementById("detail-close").onclick = closeDetail;
+      detailPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }).catch(function(){});
   }
   function loadList(reset) {
     if (reset) { offset = 0; document.getElementById("tbody").innerHTML = ""; }
@@ -289,6 +386,9 @@
         td5.textContent = channelText;
         td5.title = channelTitle || channelText;
         tr.appendChild(td5);
+        // 点击行展开详情（摘要 / 渠道返回 / 批次明细）
+        tr.className = "clickable";
+        tr.onclick = function(){ openDetail(r.id); };
         tbody.appendChild(tr);
       }
       offset += rows.length;

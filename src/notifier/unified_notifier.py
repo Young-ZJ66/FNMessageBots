@@ -720,25 +720,13 @@ class UnifiedNotifier:
             if event_type == "POLL_BATCH_SUMMARY":
                 by_type = event_data.get("by_type") if isinstance(event_data.get("by_type"), dict) else {}
                 render_meta = event_data.get("batch_render_meta") if isinstance(event_data.get("batch_render_meta"), dict) else {}
-                grouped = event_data.get("grouped_events") if isinstance(event_data.get("grouped_events"), dict) else {}
-                grouped_preview = {}
-                for et, rows in grouped.items():
-                    if not isinstance(rows, list):
-                        continue
-                    preview_rows = []
-                    for r in rows[:3]:
-                        if not isinstance(r, dict):
-                            continue
-                        preview_rows.append({
-                            "timestamp": r.get("timestamp"),
-                            "event_data": r.get("event_data") if isinstance(r.get("event_data"), dict) else {},
-                        })
-                    grouped_preview[str(et)] = preview_rows
+                # 全量批次简报（每条 120 字内），推送记录详情页可逐条查看
+                batch_items = event_data.get("batch_items") if isinstance(event_data.get("batch_items"), list) else []
                 detail.update({
                     "batch_total": int(event_data.get("count") or 0),
                     "batch_type_count": len(by_type),
                     "batch_render_meta": render_meta,
-                    "grouped_events_preview": grouped_preview,
+                    "batch_items": batch_items,
                 })
                 # 汇总事件不在 push_history 中保存全量 grouped_events，避免 detail 过大
                 detail["event_data"] = {

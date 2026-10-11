@@ -16,7 +16,10 @@ from src.utils.log_storage import LogStorage
 
 class EventProcessor:
     """事件处理器"""
-    
+
+    # 随汇总事件写入推送记录的批次明细上限（条）；超过部分仍在 data/logs 全量落盘
+    BATCH_ITEMS_HISTORY_LIMIT = 500
+
     def __init__(self, notifier: UnifiedNotifier, config):
         """
         初始化事件处理器
@@ -194,6 +197,7 @@ class EventProcessor:
         timestamp = getattr(latest_entry, "timestamp", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         by_type: Dict[str, int] = {}
         preview_items: List[Dict[str, str]] = []
+        batch_items: List[Dict[str, str]] = []
         grouped_events: Dict[str, List[Dict[str, Any]]] = {}
         raw_for_storage: List[Dict[str, Any]] = []
         source_keys: List[str] = []
@@ -225,6 +229,14 @@ class EventProcessor:
                     "brief": self._build_batch_event_brief(event_type, event_data),
                 })
 
+            # 全量批次简报：随汇总事件写入推送记录详情（推送消息只展示前若干条）
+            if len(batch_items) < self.BATCH_ITEMS_HISTORY_LIMIT:
+                batch_items.append({
+                    "event_type": event_type,
+                    "timestamp": getattr(entry, "timestamp", timestamp),
+                    "brief": self._build_batch_event_brief(event_type, event_data),
+                })
+
             raw_for_storage.append({
                 "event_type": event_type,
                 "event_data": event_data,
@@ -246,6 +258,7 @@ class EventProcessor:
             "by_type": by_type,
             "items": preview_items,
             "grouped_events": grouped_events,
+            "batch_items": batch_items,
         }
         if source_keys:
             source_sig = "|".join(source_keys)
