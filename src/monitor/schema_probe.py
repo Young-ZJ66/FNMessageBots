@@ -115,10 +115,14 @@ def probe(conn, schema_key: str, logger: logging.Logger, db_path: str = "") -> D
 
 
 def table_columns(conn, table: str) -> Set[str]:
-    """返回表的实际列名集合；表不存在或无权限时返回空集合。"""
+    """返回表的实际列名集合；表不存在或无权限时返回空集合。
+
+    使用 table-valued pragma（pragma_table_info(?)）参数化传入表名，
+    避免 SQL 拼接；要求 SQLite ≥ 3.16（2017 年），fnOS 自带版本满足。
+    """
     cols: Set[str] = set()
     try:
-        cur = conn.execute(f"PRAGMA table_info({table})")
+        cur = conn.execute("SELECT cid, name FROM pragma_table_info(?)", (table,))
     except Exception:
         return cols
     try:

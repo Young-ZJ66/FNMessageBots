@@ -264,13 +264,16 @@ class TestEmojiReduction(NotifierCase):
             n.close()
         self.assertEqual(msg.title, "我的NAS-登录成功通知")
 
-    def test_emoji_kept_when_explicitly_enabled(self):
+    def test_emoji_never_added_by_templates(self):
+        """推送文案模板不再自带图标；显式开启也只影响事件数据自带的字符。"""
         n = self.make(plain_emoji_enabled=True)
         try:
             msg = n._build_message("LoginSucc", {"user": "a"}, "t", "{}")
         finally:
             n.close()
-        self.assertIn("🔐", msg.title, "显式开启后应保留原有图标")
+        self.assertNotRegex(
+            msg.title, r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", "标题模板不得携带图标"
+        )
 
     def test_markdown_body_has_no_emoji(self):
         n = self.make(wechat_webhook_url="http://example.test/x")
@@ -305,7 +308,15 @@ class TestMarkdownConversionUnit(unittest.TestCase):
         out = _markdown_body_from_plain("【登录成功通知】\n\t用户名: a\n\tIP: 1.1.1.1\n\n说明行")
         self.assertEqual(
             out.splitlines(),
-            ["【登录成功通知】", "- 用户名: a", "- IP: 1.1.1.1", "", "说明行"],
+            ["**登录成功通知**", "- 用户名: a", "- IP: 1.1.1.1", "", "说明行"],
+        )
+
+    def test_consecutive_indented_lines_stay_top_level(self):
+        """企微 markdown 不支持嵌套列表：连续明细行必须是一级列表项。"""
+        out = _markdown_body_from_plain("2026-01-01 12:00:00\n\t影片1 · a.mkv\n\t影片2 · b.mkv")
+        self.assertEqual(
+            out.splitlines(),
+            ["2026-01-01 12:00:00", "- 影片1 · a.mkv", "- 影片2 · b.mkv"],
         )
 
     def test_ellipsis_line_kept_separate(self):

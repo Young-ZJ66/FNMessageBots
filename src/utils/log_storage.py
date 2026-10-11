@@ -353,62 +353,6 @@ class LogStorage:
             self.logger.error(f"获取统计信息失败: {e}")
             return {}
     
-    def export_logs(self, output_path: str, event_type: str = None, 
-                   start_date: str = None, end_date: str = None) -> bool:
-        """
-        导出日志到文件
-        
-        Args:
-            output_path: 输出文件路径
-            event_type: 事件类型过滤（可选）
-            start_date: 开始日期（可选）
-            end_date: 结束日期（可选）
-            
-        Returns:
-            导出是否成功
-        """
-        try:
-            export_data = []
-            
-            # 收集符合条件的日志
-            if event_type and start_date and end_date:
-                # 特定事件类型和日期范围
-                logs = self.get_logs_by_date_range(start_date, end_date)
-                export_data = [log for log in logs if log.get('event_type') == event_type]
-            elif event_type:
-                # 特定事件类型
-                export_data = self.get_logs_by_event_type(event_type)
-            elif start_date and end_date:
-                # 特定日期范围
-                export_data = self.get_logs_by_date_range(start_date, end_date)
-            else:
-                # 所有日志
-                for log_file in self.storage_dir.glob("*.log"):
-                    if log_file.exists():
-                        with open(log_file, 'r', encoding='utf-8') as f:
-                            for line in f:
-                                line = line.strip()
-                                if line:
-                                    try:
-                                        log_entry = json.loads(line)
-                                        export_data.append(log_entry)
-                                    except json.JSONDecodeError:
-                                        continue
-            
-            # 写入文件
-            output_file = Path(output_path)
-            output_file.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(export_data, f, ensure_ascii=False, indent=2)
-            
-            self.logger.info(f"日志导出完成: {output_path}, 共 {len(export_data)} 条记录")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"导出日志失败: {e}")
-            return False
-    
     def cleanup_old_logs(self, days_to_keep: int = 30) -> int:
         """
         清理旧日志文件

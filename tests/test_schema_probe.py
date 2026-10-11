@@ -155,13 +155,27 @@ class TestMediaDeleteProbe(ProbeCase):
         self.assertEqual(self.capture.text(logging.WARNING), "")
 
     def test_time_column_variants_accepted(self):
-        for col in ("update_time", "delete_time", "create_time", "time"):
+        # 列名变体逐条静态建表（避免动态拼接 SQL）
+        variants = (
+            ("update_time", "update_time.db3"),
+            ("delete_time", "delete_time.db3"),
+            ("create_time", "create_time.db3"),
+            ("time", "time.db3"),
+        )
+        for col, db_name in variants:
             with self.subTest(column=col):
                 reset_schema_probe_cache()
                 self.capture.records.clear()
-                conn = sqlite3.connect(str(self.root / f"{col}.db3"))
-                conn.execute(f"CREATE TABLE media_delete (guid TEXT, {col} INTEGER)")
+                conn = sqlite3.connect(str(self.root / db_name))
                 try:
+                    if col == "update_time":
+                        conn.execute("CREATE TABLE media_delete (guid TEXT, update_time INTEGER)")
+                    elif col == "delete_time":
+                        conn.execute("CREATE TABLE media_delete (guid TEXT, delete_time INTEGER)")
+                    elif col == "create_time":
+                        conn.execute("CREATE TABLE media_delete (guid TEXT, create_time INTEGER)")
+                    else:
+                        conn.execute("CREATE TABLE media_delete (guid TEXT, time INTEGER)")
                     cols = probe_media_delete(conn, self.logger)
                     self.assertIn(col, cols)
                     self.assertEqual(self.capture.text(logging.WARNING), "", f"{col} 应被接受")

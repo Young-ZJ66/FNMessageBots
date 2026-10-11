@@ -162,12 +162,12 @@ def perform_health_check(config_path: str = None) -> int:
         print("飞牛NAS日志监控系统 - 健康检查报告")
         print("=" * 50)
         print(f"检查时间: {report['timestamp']}")
-        print(f"整体状态: {'✅ 健康' if report['all_healthy'] else '❌ 异常'}")
+        print(f"整体状态: {'健康' if report['all_healthy'] else '异常'}")
         print()
         
         print("详细检查结果:")
         for check_name, result in report['checks'].items():
-            status = "✅ 通过" if result else "❌ 失败"
+            status = "通过" if result else "失败"
             print(f"  {check_name}: {status}")
         
         print()

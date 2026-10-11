@@ -275,14 +275,13 @@ def add_record(
             cur = conn.execute("SELECT COUNT(*) FROM push_history")
             count = cur.fetchone()[0]
             if count > MAX_RECORDS:
-                cur = conn.execute(
-                    "SELECT id FROM push_history ORDER BY id ASC LIMIT ?", (DELETE_BATCH,)
+                # 直接按最老 id 删除：单条静态语句，无需拼接 IN 占位符
+                conn.execute(
+                    "DELETE FROM push_history WHERE id IN "
+                    "(SELECT id FROM push_history ORDER BY id ASC LIMIT ?)",
+                    (DELETE_BATCH,),
                 )
-                ids = [row[0] for row in cur.fetchall()]
-                if ids:
-                    placeholders = ",".join("?" * len(ids))
-                    conn.execute(f"DELETE FROM push_history WHERE id IN ({placeholders})", ids)
-                    conn.commit()
+                conn.commit()
         finally:
             conn.close()
 
@@ -314,14 +313,13 @@ def bulk_insert(records: List[Dict[str, Any]]) -> None:
             cur = conn.execute("SELECT COUNT(*) FROM push_history")
             count = cur.fetchone()[0]
             if count > MAX_RECORDS:
-                cur = conn.execute(
-                    "SELECT id FROM push_history ORDER BY id ASC LIMIT ?", (DELETE_BATCH,)
+                # 直接按最老 id 删除：单条静态语句，无需拼接 IN 占位符
+                conn.execute(
+                    "DELETE FROM push_history WHERE id IN "
+                    "(SELECT id FROM push_history ORDER BY id ASC LIMIT ?)",
+                    (DELETE_BATCH,),
                 )
-                ids = [row[0] for row in cur.fetchall()]
-                if ids:
-                    placeholders = ",".join("?" * len(ids))
-                    conn.execute(f"DELETE FROM push_history WHERE id IN ({placeholders})", ids)
-                    conn.commit()
+                conn.commit()
         finally:
             conn.close()
 

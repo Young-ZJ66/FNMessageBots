@@ -85,20 +85,10 @@ def show_logs_by_event_type(storage: LogStorage, event_type: str, limit: int = 1
         print("-" * 80)
 
 
-def export_logs(storage: LogStorage, output_file: str, event_type: str = None):
-    """导出日志"""
-    success = storage.export_logs(output_file, event_type=event_type)
-    
-    if success:
-        print(f"✅ 日志导出成功: {output_file}")
-    else:
-        print(f"❌ 日志导出失败")
-
-
 def cleanup_old_logs(storage: LogStorage, days: int):
     """清理旧日志"""
     deleted_count = storage.cleanup_old_logs(days)
-    print(f"🗑️  已清理 {deleted_count} 条 {days} 天前的旧日志")
+    print(f"已清理 {deleted_count} 条 {days} 天前的旧日志")
 
 
 def main():
@@ -118,12 +108,7 @@ def main():
     type_parser = subparsers.add_parser('type', help='按事件类型查询日志')
     type_parser.add_argument('event_type', help='事件类型')
     type_parser.add_argument('--limit', type=int, default=10, help='返回记录数限制')
-    
-    # 导出命令
-    export_parser = subparsers.add_parser('export', help='导出日志')
-    export_parser.add_argument('output_file', help='输出文件路径')
-    export_parser.add_argument('--event-type', help='按事件类型过滤')
-    
+
     # 清理命令
     cleanup_parser = subparsers.add_parser('cleanup', help='清理旧日志')
     cleanup_parser.add_argument('days', type=int, help='保留天数')
@@ -144,8 +129,6 @@ def main():
         show_recent_logs(storage, args.hours)
     elif args.command == 'type':
         show_logs_by_event_type(storage, args.event_type, args.limit)
-    elif args.command == 'export':
-        export_logs(storage, args.output_file, args.event_type)
     elif args.command == 'cleanup':
         cleanup_old_logs(storage, args.days)
 
