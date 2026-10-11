@@ -137,7 +137,11 @@ class ContentBuildersMixin:
                     for_batch_inner=False,
                 )
             body = self._build_poll_batch_summary_content(event_data)
-            return (f"时间: {timestamp}", self._strip_body_emojis(body), "")
+            # 单类型批量：每条条目自带「时间」行，不再需要顶部的汇总时间行
+            grouped_raw = event_data.get("grouped_events")
+            single_type = isinstance(grouped_raw, dict) and len(grouped_raw) == 1
+            ts_line = "" if single_type else f"时间: {timestamp}"
+            return (ts_line, self._strip_body_emojis(body), "")
 
         if event_type == "NAS_PATROL_REPORT":
             return (f"时间: {timestamp}", self._strip_body_emojis(self._build_nas_patrol_content(event_data)), "")
@@ -1056,6 +1060,7 @@ class ContentBuildersMixin:
             return ["外网IP变化"]
 
         if et in ("TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED"):
+            # 影视批量条目：一行一个键值对（时间行由调用方按条补在末尾）
             title = (ed.get("title") or data.get("title") or "").strip()
             item_type = (ed.get("item_type") or data.get("item_type") or "").strip()
             path = (ed.get("path") or data.get("path") or "").strip()
@@ -1077,22 +1082,20 @@ class ContentBuildersMixin:
                 "Movie": "电影",
                 "Video": "视频",
             }
-            trim_bits: List[str] = []
+            out: List[str] = []
             if title:
-                trim_bits.append(f"片名: {title}")
-            elif filename:
-                trim_bits.append(f"文件: {filename}")
+                out.append(f"片名: {title}")
             if item_type:
-                trim_bits.append(f"类型: {type_map.get(item_type, item_type)}")
+                out.append(f"类型: {type_map.get(item_type, item_type)}")
             if season_number not in (None, "", 0) and episode_number not in (None, "", 0):
-                trim_bits.append(f"集数: 第{season_number}季{episode_number}集")
+                out.append(f"集数: 第{season_number}季{episode_number}集")
             elif episode_number not in (None, "", 0):
-                trim_bits.append(f"集数: 第{episode_number}集")
+                out.append(f"集数: 第{episode_number}集")
             elif season_number not in (None, "", 0):
-                trim_bits.append(f"集数: 第{season_number}季")
-            if filename and title and filename != title:
-                trim_bits.append(f"文件: {filename}")
-            return [" · ".join(trim_bits)[:200]] if trim_bits else [et]
+                out.append(f"集数: 第{season_number}季")
+            if filename and (not title or filename != title):
+                out.append(f"文件: {filename}")
+            return out or [et]
 
         if et in ("MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT", "MEDIA_USER_CREATED"):
             media_bits: List[str] = []
@@ -1176,7 +1179,7 @@ class ContentBuildersMixin:
                     if not _append(f"【{title}】"):
                         break
                 shown = evs[:per_type_limit]
-                for item in shown:
+                for idx, item in enumerate(shown):
                     ed_raw = item.get('event_data')
                     ed = ed_raw if isinstance(ed_raw, dict) else {}
                     try:
@@ -1184,8 +1187,20 @@ class ContentBuildersMixin:
                     except Exception:
                         brief = str(item.get('brief') or str(event_type))
                         key_lines = [self._strip_body_emojis(f"解析失败: {brief}").strip() or str(event_type)]
-                    for kl in key_lines:
-                        if not _append("\t" + kl):
+                    if single_type:
+                        # 单类型批量：一行一个键值对，每条以自身时间收尾，条目间空行分隔
+                        for kl in key_lines:
+                            if not _append("\t" + kl):
+                                break
+                        item_ts = str(item.get('timestamp') or "")
+                        if item_ts:
+                            _append("\t时间: " + item_ts)
+                        if idx < len(shown) - 1:
+                            if not _append(""):
+                                break
+                    else:
+                        # 多类型汇总：单条压成一行紧凑展示
+                        if not _append("\t" + " · ".join(key_lines)):
                             break
                 if len(evs) > per_type_limit:
                     left = len(evs) - per_type_limit
