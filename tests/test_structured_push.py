@@ -329,11 +329,11 @@ class TestMarkdownConversionUnit(unittest.TestCase):
 
     def test_message_merged_markdown_prefers_markdown_field(self):
         msg = MultiPlatformMessage(title="T", content="用户名: a", markdown="- 用户名: a")
-        self.assertEqual(msg.merged_markdown(), "T\n\n- 用户名: a")
+        self.assertEqual(msg.merged_markdown(), "## T\n\n- 用户名: a")
 
     def test_message_merged_markdown_falls_back_to_content(self):
         msg = MultiPlatformMessage(title="T", content="用户名: a")
-        self.assertEqual(msg.merged_markdown(), "T\n\n- 用户名: a")
+        self.assertEqual(msg.merged_markdown(), "## T\n\n- 用户名: a")
 
 
 if __name__ == "__main__":

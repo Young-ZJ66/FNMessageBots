@@ -332,13 +332,17 @@ class MultiPlatformMessage:
         return f"{title}{sep}{content_raw}"
 
     def merged_markdown(self, *, blank_line_between: bool = True) -> str:
-        """标题与正文合并为 markdown；未预渲染时回退为纯文本正文的等价结构。"""
-        title = self.title or ""
+        """标题与正文合并为 markdown；未预渲染时回退为纯文本正文的等价结构。
+
+        标题使用「##」二级标题样式：企微/钉钉 markdown 渲染为大号字体，
+        与概要、明细在视觉上分层（加粗 ** 不改变字号，标题会与概要混同）。
+        """
+        title = (self.title or "").strip()
         body = self.markdown if self.markdown.strip() else _markdown_body_from_plain(self.content or "")
         if not body.strip():
-            return title
+            return f"## {title}" if title else ""
         sep = "\n\n" if blank_line_between else "\n"
-        return f"{title}{sep}{body}"
+        return f"## {title}{sep}{body}"
 
     def to_wechat_format(self) -> Dict[str, Any]:
         """转换为企业微信格式（纯文本）"""
