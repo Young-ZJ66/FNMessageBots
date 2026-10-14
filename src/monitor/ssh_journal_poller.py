@@ -37,6 +37,17 @@ SSH_JOURNAL_EVENTS: Set[str] = {
 
 _STATE_FILENAME = "ssh_journal_poller_state.json"
 
+# 「读不到宿主机 journal」的排查提示。飞牛的 journal 常见是 volatile（/run/log/journal，tmpfs），
+# 也有机器启用了持久化（/var/log/journal）；因此要按**宿主机实际存在**的那个目录来挂，
+# 挂一个不存在的路径只会创建一个空目录，反而更迷惑。
+JOURNAL_MOUNT_HINT = (
+    "常见原因：容器未挂载宿主机的 journal 目录与 /etc/machine-id。"
+    "先在宿主机执行 `ls -ld /var/log/journal /run/log/journal` 确认哪个存在，"
+    "然后按实际存在的挂载（飞牛多为 /run/log/journal），并必须挂载宿主机的 "
+    "/etc/machine-id —— journal 按 machine-id 分目录存放，容器用它自己的 id 会找不到；"
+    "或 SSH 的 unit 名不是 ssh/sshd。"
+)
+
 # 开启「忽略本机回环」时只静默这两类；失败 / 无效用户仍推送，避免内网穿透场景下漏掉暴力破解
 SSH_LOOPBACK_QUIET_EVENTS = frozenset({SSH_LOGIN_SUCCESS, SSH_DISCONNECTED})
 
@@ -152,6 +163,9 @@ class SshJournalPoller:
         self.logger = logging.getLogger(__name__)
         self.cursor_dir.mkdir(parents=True, exist_ok=True)
         self._available: Optional[bool] = None
+        # 「取不到游标」的告警只打一次：游标为空时每个轮询周期都会重新对齐，
+        # 不去重会把日志刷爆，反而掩盖真正的问题。
+        self._align_warned = False
 
     def add_handler(self, event_type: str, handler: Callable) -> None:
         self.event_handlers[event_type] = handler
@@ -186,15 +200,37 @@ class SshJournalPoller:
         return bool(self._available)
 
     def _probe(self) -> bool:
+        """判断本采集链路是否真的可用。
+
+        只看 journalctl 的退出码是不够的：**读不到任何 journal 文件时它同样返回 0**
+        （仅在 stderr 输出 "No journal files were found."）。早期实现据此判定「可用」，
+        后果是两条路径互相抵消——
+          1. `main.py` 因为这里返回 True 而设置 `db_log_poller.skip_ssh_events = True`，
+             库内的 Sshd* 事件被丢弃；
+          2. 本轮询器又拿不到游标，一条都不推。
+        于是 SSH 事件**完全静默丢失**，只留下一条看起来无害的 INFO。
+
+        因此这里改为：必须真的能读出一份 journal 并拿到游标才算可用。
+        用**不带 `-u` 过滤**的读取做判据——宿主机 journal 只要被正确挂载，
+        就一定有系统自身的条目（内核/服务启动等），因此必然能取到游标；
+        取不到即说明容器看不到宿主机的 journal，此时应判定不可用并让库表兜底。
+        """
         if not journalctl_available():
             self.logger.warning("未找到 journalctl，无法采集 SSH journal")
             return False
-        # 试读一条（可能无权限）；-n 0 只拿 cursor
-        code, out, err = self._run_journalctl(["-n", "0", "--show-cursor"])
+        code, out, err = self._run_journalctl(["-n", "1", "--show-cursor"], with_units=False)
         if code != 0:
             self.logger.warning(
-                "journalctl 不可用或无权读取 SSH journal（请挂载 /var/log/journal 与 /etc/machine-id）: %s",
+                "journalctl 不可用或无权读取 journal: %s",
                 (err or out or "").strip()[:240],
+            )
+            return False
+        if not self._extract_show_cursor(out):
+            self.logger.warning(
+                "容器读不到宿主机的 journal（journalctl 返回 0 但没有游标，通常还伴随 "
+                '"No journal files were found."）。%s'
+                "已跳过 SSH journal 采集，改由库表 logger_data 中的 Sshd* 事件兜底。",
+                JOURNAL_MOUNT_HINT,
             )
             return False
         return True
@@ -207,13 +243,14 @@ class SshJournalPoller:
                 args.extend(["-u", u])
         return args or ["-u", "ssh", "-u", "sshd"]
 
-    def _run_journalctl(self, extra: List[str]) -> Tuple[int, str, str]:
+    def _run_journalctl(self, extra: List[str], with_units: bool = True) -> Tuple[int, str, str]:
         cmd: List[str] = ["journalctl"]
         # 容器内读宿主机 journal 时，若挂载了目录可显式指定
         journal_dir = (os.environ.get("SSH_JOURNAL_DIRECTORY") or "").strip()
         if journal_dir and Path(journal_dir).is_dir():
             cmd.append(f"--directory={journal_dir}")
-        cmd.extend(self._unit_args())
+        if with_units:
+            cmd.extend(self._unit_args())
         cmd.extend(["--no-pager", *extra])
         try:
             p = subprocess.run(
@@ -232,7 +269,8 @@ class SshJournalPoller:
             return 1, "", str(e)
 
     def _load_state(self) -> Dict[str, Any]:
-        default = {"version": 1, "cursor": "", "aligned": False}
+        # boot_id：对齐时记录的内核 boot id，用于识别「宿主机重启后 volatile journal 被清空」
+        default = {"version": 1, "cursor": "", "aligned": False, "boot_id": ""}
         try:
             if self._state_file.exists():
                 obj = json.loads(self._state_file.read_text(encoding="utf-8") or "{}")
@@ -257,22 +295,52 @@ class SshJournalPoller:
         return ""
 
     def _align_cursor(self, state: Dict[str, Any]) -> None:
-        """对齐到当前 journal 末尾，不补推历史。"""
-        code, out, err = self._run_journalctl(["-n", "0", "--show-cursor"])
-        if code != 0:
-            self.logger.warning("SSH journal 对齐失败: %s", (err or out)[:240])
-            return
-        cur = self._extract_show_cursor(out)
-        if cur:
-            state["cursor"] = cur
-            state["aligned"] = True
-            self._save_state(state)
-            self.logger.info("SSH journal 已对齐当前游标（不推送历史）")
-        else:
-            # 无日志时也可能没有 cursor；标记 aligned，下次用 --since now 思路仍靠 after-cursor 空
-            state["aligned"] = True
-            self._save_state(state)
-            self.logger.info("SSH journal 对齐完成（暂无 cursor，等待新日志）")
+        """对齐到当前 journal 末尾，不补推历史。
+
+        先试 `-n 0 --show-cursor`；但部分 systemd 版本在「输出 0 条」时不打印
+        `-- cursor:` 行（没有"最后一条"可定位），这种版本下首次对齐永远拿不到游标，
+        采集链路会静默卡死。故回退 `-n 1 --show-cursor` 取最后一条的游标——
+        之后用 `--after-cursor` 依然会跳过该条，不会补推历史。
+
+        两种方式都拿不到时，把 journalctl 的**实际输出**打进日志：否则这条链路
+        失败时完全没有线索（最常见原因是容器没挂载宿主机的 journal 目录与
+        /etc/machine-id，此时 journalctl 看到的是空 journal，退出码仍是 0）。
+        """
+        attempts: List[Tuple[List[str], str, str]] = []
+        for args in (["-n", "0", "--show-cursor"], ["-n", "1", "--show-cursor"]):
+            code, out, err = self._run_journalctl(args)
+            if code != 0:
+                self.logger.warning(
+                    "SSH journal 对齐失败（journalctl %s）: %s",
+                    " ".join(args),
+                    (err or out).strip()[:240],
+                )
+                return
+            cur = self._extract_show_cursor(out)
+            if cur:
+                state["cursor"] = cur
+                state["aligned"] = True
+                # 记下对齐时的 boot id，用于识别「宿主机重启后 journal 被清空」
+                state["boot_id"] = self._current_boot_id()
+                self._save_state(state)
+                self.logger.info("SSH journal 已对齐当前游标（不推送历史）")
+                return
+            attempts.append((args, out, err))
+
+        state["aligned"] = True
+        self._save_state(state)
+        if not self._align_warned:
+            self._align_warned = True
+            detail = " / ".join(
+                f"journalctl {' '.join(a)} → stdout={(o or '').strip()[:100]!r}"
+                f" stderr={(e or '').strip()[:100]!r}"
+                for a, o, e in attempts
+            )
+            self.logger.warning(
+                "SSH journal 取不到游标，**SSH 事件将不会推送**。%s 本次实际输出：%s",
+                JOURNAL_MOUNT_HINT,
+                detail,
+            )
 
     def _fetch_entries(self, cursor: str) -> Tuple[List[Dict[str, Any]], str]:
         """返回 (entries, new_cursor)。entries 为 journal -o json 对象列表。
@@ -377,8 +445,32 @@ class SshJournalPoller:
         except Exception as e:
             self.logger.error("处理 SSH journal 事件失败 %s: %s", event_type, e, exc_info=True)
 
+    @staticmethod
+    def _current_boot_id() -> str:
+        """当前内核的 boot id（宿主机的，容器共享同一内核）。
+
+        用于识别「journal 已被重置」：journalctl 的游标是**不透明字符串**，但我们不需要
+        解析它——只要记住对齐当时的 boot id，之后比对即可。飞牛的 journal 常是 volatile
+        （/run/log/journal，tmpfs），宿主机一重启就清空，此时旧游标指向一个不存在的
+        boot，`--after-cursor` 会一直失败而卡住。读不到时返回空串（视为无法判断）。
+        """
+        try:
+            return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
     def _poll_once(self, state: Dict[str, Any]) -> None:
         if not state.get("aligned"):
+            self._align_cursor(state)
+            return
+        # journal 被重置（宿主机重启、volatile journal 清空）时旧游标已失效，重新对齐。
+        # 不处理的话 `--after-cursor` 会拿一个属于旧 boot 的游标反复失败，链路再次静默卡死。
+        cur_boot = self._current_boot_id()
+        saved_boot = str(state.get("boot_id") or "")
+        if cur_boot and saved_boot and cur_boot != saved_boot:
+            self.logger.info("检测到 journal 已重置（boot id 变化），重新对齐游标")
+            state["cursor"] = ""
+            state["aligned"] = False
             self._align_cursor(state)
             return
         cursor = str(state.get("cursor") or "")
