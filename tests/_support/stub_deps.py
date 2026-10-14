@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import sys
 import types
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 _STUB_MODULE_NAMES = (
@@ -183,17 +184,32 @@ def install() -> None:
     sys.modules["urllib3.util"] = urllib3_util
     sys.modules["urllib3.util.retry"] = urllib3_retry
 
-    for name in ("docker", "psutil", "flask", "croniter"):
+    for name in ("docker", "psutil", "croniter"):
         if name in sys.modules:
             continue
-        stub = _make_stub(name)
-        if name == "flask":
-            # PEP 562：web.ui_app 用 `from flask import Flask, ...` 导入，
-            # 空桩会导致 ImportError；未知属性返回可调用桩即可满足导入期需求。
-            stub.__getattr__ = _autostub_getattr
-        # docker / psutil / croniter 保持空桩：
-        # 相关模块以 try-import 区分「依赖缺失」，导入成功但属性缺失时走各自的降级路径。
-        sys.modules[name] = stub
+        # 保持空桩：相关模块以 try-import 区分「依赖缺失」，
+        # 导入成功但属性缺失时走各自的降级路径。
+        sys.modules[name] = _make_stub(name)
+
+    # flask 用功能桩：ui_app.create_app() 要真的能跑起来，
+    # 才能真正测到路由、鉴权闸门与打码上下文（见 tests/_support/stub_flask.py）。
+    if "flask" not in sys.modules:
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        import stub_flask  # type: ignore[import-not-found]
+
+        flask_mod = _make_stub("flask")
+        flask_mod.Flask = stub_flask.Flask
+        flask_mod.Response = stub_flask.Response
+        flask_mod.request = stub_flask.request
+        flask_mod.jsonify = stub_flask.jsonify
+        flask_mod.render_template = stub_flask.render_template
+        flask_mod.send_from_directory = stub_flask.send_from_directory
+        flask_mod.abort = stub_flask.abort
+        flask_mod.redirect = stub_flask.redirect
+        flask_mod.url_for = stub_flask.url_for
+        sys.modules["flask"] = flask_mod
 
 
 def _autostub_getattr(name: str) -> Callable[..., Any]:
