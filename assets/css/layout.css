@@ -221,6 +221,11 @@
 .col-channel-type { width: 120px; }
 .col-channel-ops { width: 140px; }
 
+/* 事件卡的最小列宽要放大：原为 minmax(200px, 1fr)，在主内容区变宽（侧栏布局）
+   之后 auto-fill 会自动填成 4 列，卡片变窄使说明文字截断得比原来厉害。
+   提到 300px 恢复 3 列，说明文字才有余地。 */
+[data-page="index"] .events-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+
 /* ── 窄屏：侧栏折叠为顶部横向导航条 ──
    不折叠的话 236px 侧栏会把内容整段挤出视口（实测会出现整页横向偏移）。 */
 @media (max-width: 900px) {
