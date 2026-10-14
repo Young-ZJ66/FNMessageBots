@@ -1,0 +1,189 @@
+/* ============================================================================
+   FnMessageBot · 设计令牌
+   ----------------------------------------------------------------------------
+   方向：Calm Cyan（浅色为底 + 低饱和青 + 柔和两级阴影）
+
+   规则（重构后请遵守，否则深色模式会退化成逐选择器覆盖）：
+     1. 颜色只在 :root 与 :root[data-theme="dark"] 两处定义；
+     2. 组件样式（app.css）里**不得出现任何硬编码颜色**，一律 var(--token)；
+     3. 深色模式只覆盖令牌，不改写任何组件规则。
+
+   字体：自托管 Inter（可变字体，100–900）与 JetBrains Mono（可变字体，100–800），
+        仅含 latin 子集。中文不在其 unicode-range 内，按设计回退到系统 CJK 字体。
+        授权：SIL OFL 1.1，见 assets/fonts/*-OFL.txt。
+   ========================================================================== */
+
+/* ── 字体：可变字体，一个 @font-face 覆盖整个字重区间 ─────────────────────
+   注意 unicode-range 必须保留：否则字体文件会被用来渲染中文，
+   而 latin 子集里没有汉字，会导致中文显示为豆腐块。 */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../fonts/Inter-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+                 U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+                 U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("../fonts/JetBrainsMono-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+                 U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+                 U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ── 亮色（默认）────────────────────────────────────────────────────────── */
+:root {
+  color-scheme: light;
+
+  /* 面向使用者的语义色。对比度已按 WCAG 2.1 校验（正文/小字 ≥ 4.5:1） */
+  --bg:            #f7fafc;  /* 页面底 */
+  --surface:       #ffffff;  /* 卡片、侧栏、表格底 */
+  --surface-2:     #f0f6f8;  /* 次级面：斑马纹、hover、输入框底 */
+  --surface-3:     #e6eef2;  /* 三级面：按下态、选中态 */
+  --border:        #e2e8f0;  /* 常规分隔线 */
+  --border-strong: #cbd5e1;  /* 输入框、开关轨道等需要更明确的边界 */
+
+  --text:          #0f172a;  /* 正文 */
+  --text-muted:    #526175;  /* 次要文字：标签、说明 */
+  /* 弱化文字：eventId、时间戳等辅助信息。
+     必须能在 --surface-2 上达到 4.5:1（斑马纹/悬停行），
+     这比在纯白上严格，所以取值比「看起来够灰」更深一些。
+     与 --text-muted 的色差不明显，层级主要靠字号/字重区分，而非只靠颜色。 */
+  --text-faint:    #5d6b7e;
+
+  --accent:        #0e7490;  /* 主色：低饱和青（不是装饰色，用于可交互元素） */
+  --accent-hover:  #0b5e77;  /* 主色悬停：比主色更深一档 */
+  --accent-fg:     #ffffff;  /* 主色上的文字 */
+  --accent-soft:   #e0f2f7;  /* 主色浅底：选中项背景 */
+  --accent-soft-border: #bae6fd;  /* 主色浅底上的描边 */
+  --accent-text:   #0e7490;  /* 主色作为文字用（与 --accent 同值，语义分开便于日后微调） */
+
+  --ok:            #047857;
+  /* 警告色取「琥珀与黄之间」而非纯琥珀：纯琥珀 #b45309 与 --err 的感知色差
+     只有 ΔE 9.9（OKLab×100），而它距 --ok 有 21.9——极不平衡。
+     #96620a 把两者拉到各 ~16，最差情况明显变好，且对比度更高（白卡 5.19）。 */
+  --warn:          #96620a;
+  --err:           #c81e1e;  /* 比标准 #dc2626 略深：后者在 --err-soft 上只有 4.17:1 */
+  --info:          #0e7490;
+  --ok-soft:       #e3f5ec;
+  --warn-soft:     #f6efdc;
+  --err-soft:      #fdeaea;
+  --info-soft:     #e0f2f7;
+
+  --knob:          #ffffff;  /* 开关滑块 */
+
+  /* 阴影/发光用的颜色（只给颜色，形状由各地规则自带）。
+     存在的意义：从原内联样式提取时保留了每条规则的阴影几何，
+     只把颜色抽成令牌，于是深色下不会残留浅色的阴影。
+     后续按设计收敛时可整体换成 --sh-1/2/3。 */
+  --sh-color-1:    rgba(15, 23, 42, .06);
+  --sh-color-2:    rgba(15, 23, 42, .08);
+  --sh-color-3:    rgba(15, 23, 42, .18);
+  --sh-color-hard: rgba(0, 0, 0, .18);
+  --sh-color-ok:   rgba(5, 150, 105, .35);
+
+  --ring:          rgba(14, 116, 144, .35);   /* 键盘焦点环 */
+  --ring-weak:     rgba(14, 116, 144, .25);
+
+  /* 半透明面：吸附条等需要透出底层内容的地方 */
+  --surface-translucent:        rgba(255, 255, 255, .95);
+  --surface-translucent-strong: rgba(255, 255, 255, .97);
+  --border-translucent:         rgba(148, 163, 184, .32);
+
+  /* 间距（8px 基准，4px 半档） */
+  --sp-1: 4px;   --sp-2: 8px;   --sp-3: 12px;  --sp-4: 16px;
+  --sp-5: 20px;  --sp-6: 24px;  --sp-7: 32px;  --sp-8: 40px;
+
+  /* 圆角 */
+  --r-sm: 7px;   --r: 10px;   --r-lg: 14px;  --r-full: 999px;
+
+  /* 阴影：柔和两级（比扁平有层次，比拟物克制） */
+  --sh-1: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 3px rgba(15, 23, 42, .06);
+  --sh-2: 0 2px 4px rgba(15, 23, 42, .04), 0 8px 20px rgba(15, 23, 42, .07);
+  --sh-3: 0 4px 8px rgba(15, 23, 42, .05), 0 16px 40px rgba(15, 23, 42, .10);
+
+  /* 字号阶梯 */
+  --fs-xs: 11px;  --fs-sm: 12px;  --fs-md: 13px;  --fs-lg: 15px;
+  --fs-xl: 17px;  --fs-2xl: 22px; --fs-3xl: 30px;
+
+  /* 行高与字重 */
+  --lh-tight: 1.3;  --lh-normal: 1.55;  --lh-relaxed: 1.7;
+  --fw-normal: 400; --fw-medium: 500; --fw-semibold: 600; --fw-bold: 700;
+
+  /* 字族：Inter 在前，中文回退到系统 CJK */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, "Microsoft YaHei", "PingFang SC",
+               "Hiragino Sans GB", "Source Han Sans SC", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+               Consolas, "Liberation Mono", monospace;
+
+  /* 过渡 */
+  --tr-fast: .12s ease;
+  --tr: .18s ease;
+  --tr-slow: .3s ease;
+
+  /* 层级 */
+  --z-sticky: 10;  --z-dropdown: 50;  --z-modal: 100;  --z-toast: 200;
+
+  /* 布局 */
+  --sidebar-w: 236px;
+  --content-max: 1240px;
+}
+
+/* ── 深色：只覆盖令牌，不碰组件规则 ─────────────────────────────────────── */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg:            #041a1f;
+  --surface:       #0b262c;
+  --surface-2:     #10333b;
+  --surface-3:     #16414b;
+  --border:        #164e63;
+  --border-strong: #1e6b83;
+
+  --text:          #ecfeff;
+  --text-muted:    #9fc6cf;
+  --text-faint:    #8fb3bd;
+
+  --accent:        #22d3ee;
+  --accent-hover:  #67e8f9;  /* 深色下悬停应更亮，而不是更深 */
+  --accent-fg:     #04222a;
+  --accent-soft:   #0d3b45;
+  --accent-soft-border: #1e6b83;
+  --accent-text:   #22d3ee;
+
+  --ok:            #34d399;
+  --warn:          #fbbf24;
+  --err:           #fb7185;
+  --info:          #22d3ee;
+  --ok-soft:       #0d3a30;
+  --warn-soft:     #3d3115;
+  --err-soft:      #3d1d24;
+  --info-soft:     #0d3b45;
+
+  --knob:          #ffffff;
+
+  --sh-color-1:    rgba(0, 0, 0, .35);
+  --sh-color-2:    rgba(0, 0, 0, .45);
+  --sh-color-3:    rgba(0, 0, 0, .55);
+  --sh-color-hard: rgba(0, 0, 0, .50);
+  --sh-color-ok:   rgba(52, 211, 153, .40);
+
+  --ring:          rgba(34, 211, 238, .45);
+  --ring-weak:     rgba(34, 211, 238, .30);
+
+  --surface-translucent:        rgba(11, 38, 44, .95);
+  --surface-translucent-strong: rgba(11, 38, 44, .97);
+  --border-translucent:         rgba(22, 78, 99, .50);
+
+  /* 深色下阴影几乎不可见，靠描边分层；保留极轻投影只为浮层脱离感 */
+  --sh-1: 0 1px 2px rgba(0, 0, 0, .35);
+  --sh-2: 0 2px 6px rgba(0, 0, 0, .40), 0 8px 24px rgba(0, 0, 0, .30);
+  --sh-3: 0 8px 32px rgba(0, 0, 0, .50);
+}

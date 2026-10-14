@@ -1,0 +1,267 @@
+/* FnMessageBot · app.js
+   ----------------------------------------------------------------------------
+   加载配置与推送统计、初始化入口
+
+   由 design-previews/_extract_js.py 从模板内联 <script> 提取。
+   提取时**未改动任何逻辑与标识符**，仅去掉原有的 4 空格整体缩进。
+   注意：这些文件之间共享顶层作用域（无 IIFE），因此**不得重名**；
+   脚本按模板中 <script src> 的顺序执行。
+   ========================================================================== */
+
+async function loadConfig() {
+  try {
+    const res = await fetch("api/config", fetchOpts);
+    const json = await res.json();
+    if (res.status === 401) {
+      initAuth();
+      return;
+    }
+    if (!json.ok) {
+      setStatus(false, json.message || "加载配置失败");
+      return;
+    }
+    renderPersistentWarnings(json.warnings || []);
+    const data = json.data;
+    document.getElementById("app-title").textContent = data.title || "FnMessageBot";
+    document.getElementById("app-version").textContent = data.version || "";
+
+    channelOptions = data.channel_options || [];
+
+    document.getElementById("input-bark-icon").value =
+      typeof data.bark_icon === "string" ? data.bark_icon : "";
+
+    const selected = new Set(data.selected_events || []);
+    renderEventCategories(eventsContainer, data.events_by_category || [], selected, document.getElementById("events-anchor-bar"));
+    renderEventCategories(thirdPartyEventsContainer, data.third_party_events_by_category || [], selected);
+
+    // 渲染渠道
+    channelsBody.innerHTML = "";
+    if (data.channels && data.channels.length) {
+      for (const ch of data.channels) {
+        createChannelRow(ch.type || "wechat", ch.url || "", ch.enabled !== false);
+      }
+    } else {
+      // 默认只展示一行企业微信，需要其他渠道可点击「添加渠道」
+      createChannelRow("wechat", "", true);
+    }
+
+    document.getElementById("input-log-days").value = data.log_retention_days || 7;
+    document.getElementById("input-poll-interval").value = data.logger_poll_interval || 5;
+    document.getElementById("input-resume-from-cursor").checked = !!data.resume_from_cursor_on_start;
+    document.getElementById("input-poll-batch-summary").checked = !!data.poll_batch_summary_enabled;
+    document.getElementById("input-media-batch-enabled").checked = data.media_batch_summary_enabled !== false;
+    document.getElementById("input-media-batch-window").value = (data.media_batch_window ?? 90);
+    document.getElementById("input-minimal-push-enabled").checked = !!data.minimal_push_enabled;
+    document.getElementById("input-push-markdown-enabled").checked = data.push_markdown_enabled !== false;
+    document.getElementById("input-ssh-ignore-loopback").checked = !!data.ssh_ignore_loopback;
+    document.getElementById("input-title-prefix").value =
+      typeof data.title_prefix === "string" ? data.title_prefix : "飞牛NAS";
+    syncBarkIconInputsFromMaster();
+    const dndEnabled = !!data.dnd_enabled;
+    document.getElementById("input-dnd-enabled").checked = dndEnabled;
+    document.getElementById("input-dnd-start").value = data.dnd_start_time || "22:00";
+    document.getElementById("input-dnd-end").value = data.dnd_end_time || "07:00";
+    document.getElementById("input-dnd-start").disabled = !dndEnabled;
+    document.getElementById("input-dnd-end").disabled = !dndEnabled;
+    const dndToggle = document.getElementById("input-dnd-enabled");
+    dndToggle.onchange = function() {
+      const en = document.getElementById("input-dnd-enabled").checked;
+      document.getElementById("input-dnd-start").disabled = !en;
+      document.getElementById("input-dnd-end").disabled = !en;
+    };
+
+    const nasEn = document.getElementById("input-nas-patrol-enabled");
+    const nasCron = document.getElementById("input-nas-patrol-cron");
+    if (nasEn) nasEn.checked = !!data.nas_patrol_enabled;
+    if (nasCron) nasCron.value = (data.nas_patrol_cron || "0 12 * * *").trim() || "0 12 * * *";
+    function syncNasPatrolInputs() {
+      const enEl = document.getElementById("input-nas-patrol-enabled");
+      const cronEl = document.getElementById("input-nas-patrol-cron");
+      if (cronEl && enEl) cronEl.disabled = !enEl.checked;
+    }
+    if (nasEn) nasEn.onchange = syncNasPatrolInputs;
+    syncNasPatrolInputs();
+
+    // 配置已从服务端加载成功即可测推送，不必再次点「保存配置」。
+    testBtn.disabled = false;
+    setStatus(false, "");
+    loadPushStats();
+  } catch (e) {
+    console.error(e);
+    setStatus(false, "加载配置失败，请检查服务是否正常运行。");
+  }
+}
+
+async function loadPushStats() {
+  try {
+    const res = await fetch("api/push-stats", fetchOpts);
+    const json = await res.json();
+    if (!json.ok || !json.data) return;
+    const t = json.data.total || {};
+    const d = json.data.today || {};
+    document.getElementById("stat-total-total").textContent = (t.total ?? 0);
+    document.getElementById("stat-total-success").textContent = (t.success ?? 0);
+    document.getElementById("stat-total-fail").textContent = (t.fail ?? 0);
+    document.getElementById("stat-today-total").textContent = (d.total ?? 0);
+    document.getElementById("stat-today-success").textContent = (d.success ?? 0);
+    document.getElementById("stat-today-fail").textContent = (d.fail ?? 0);
+  } catch (e) { /* ignore */ }
+}
+
+addChannelBtn.addEventListener("click", () => {
+  const defaultType = channelOptions.length ? channelOptions[0].id : "wechat";
+  createChannelRow(defaultType, "", true);
+});
+
+saveBtn.addEventListener("click", async () => {
+  setStatus(false, "");
+  const events = [];
+  [eventsContainer, thirdPartyEventsContainer].forEach(el => {
+    if (!el) return;
+    el.querySelectorAll("input[type=checkbox]").forEach(cb => {
+      if (cb.checked) events.push(cb.value);
+    });
+  });
+
+  const channels = [];
+  channelsBody.querySelectorAll("tr").forEach(tr => {
+    const sel = tr.querySelector("select");
+    if (!sel) return;
+    const type = sel.value;
+    let url = "";
+    if (type === "smtp") {
+      const wrap = tr.querySelector(".smtp-fields");
+      url = serializeSmtpFromInputs(wrap);
+      if (!url) return;
+    } else if (type === "webhook") {
+      url = serializeWebhookFromInputs(tr.querySelector(".webhook-fields"));
+      if (!url) return;
+    } else if (type === "meow") {
+      url = serializeMeowFromInputs(tr.querySelector(".meow-fields"));
+      if (!url) return;
+    } else if (type === "bark") {
+      const inp = tr.querySelector(".bark-channel-fields input.channel-url-input");
+      if (!inp) return;
+      url = inp.value.trim();
+      if (!url) return;
+    } else {
+      const inp = tr.querySelector("input.channel-url-input");
+      const ta = tr.querySelector("textarea");
+      const urlEl = ta || inp;
+      if (!urlEl) return;
+      url = urlEl.value.trim();
+      if (!url) return;
+    }
+    const enableInp = tr.querySelector("input.channel-enabled-input");
+    const enabled = enableInp ? !!enableInp.checked : true;
+    channels.push({ type, url, enabled });
+  });
+
+  const payload = {
+    events,
+    channels,
+    log_retention_days: document.getElementById("input-log-days").value,
+    logger_poll_interval: document.getElementById("input-poll-interval").value,
+    resume_from_cursor_on_start: document.getElementById("input-resume-from-cursor").checked,
+    title_prefix: (document.getElementById("input-title-prefix").value || "").trim(),
+    poll_batch_summary_enabled: document.getElementById("input-poll-batch-summary").checked,
+    media_batch_summary_enabled: document.getElementById("input-media-batch-enabled").checked,
+    media_batch_window: (function () {
+      const v = parseInt(document.getElementById("input-media-batch-window").value, 10);
+      return Number.isFinite(v) ? Math.max(0, Math.min(3600, v)) : 90;
+    })(),
+    minimal_push_enabled: document.getElementById("input-minimal-push-enabled").checked,
+    push_markdown_enabled: document.getElementById("input-push-markdown-enabled").checked,
+    ssh_ignore_loopback: document.getElementById("input-ssh-ignore-loopback").checked,
+    dnd_enabled: document.getElementById("input-dnd-enabled").checked,
+    dnd_start_time: document.getElementById("input-dnd-start").value || "22:00",
+    dnd_end_time: document.getElementById("input-dnd-end").value || "07:00",
+    nas_patrol_enabled: document.getElementById("input-nas-patrol-enabled").checked,
+    nas_patrol_cron: (document.getElementById("input-nas-patrol-cron").value || "").trim(),
+    bark_icon: (document.getElementById("input-bark-icon").value || "").trim(),
+  };
+
+  try {
+    const res = await fetch("api/save-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json();
+    if (res.ok && json.ok) {
+      showToast(true, json.message || "配置已保存");
+      clearConfigDirty();
+      if (Array.isArray(json.warnings) && json.warnings.length) {
+        json.warnings.forEach(w => showToast(false, "权限告警：" + w));
+      }
+      renderPersistentWarnings(json.warnings || []);
+      testBtn.disabled = false;
+      loadConfig();
+    } else {
+      showToast(false, json.message || "保存失败");
+    }
+  } catch (e) {
+    console.error(e);
+    showToast(false, "保存失败，请检查网络或稍后再试");
+  }
+});
+
+testBtn.addEventListener("click", async () => {
+  setStatus(false, "正在发送测试消息...");
+  try {
+    const res = await fetch("api/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({}),
+    });
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch (e) { json = null; }
+    if (res.ok && json.ok) {
+      showToast(true, json.message || "测试消息已发送");
+    } else {
+      showToast(false, (json && json.message) ? json.message : ("测试发送失败：" + (text ? text.slice(0, 120) : "")));
+    }
+  } catch (e) {
+    console.error(e);
+    showToast(false, "测试发送失败，请稍后重试");
+  }
+  setStatus(false, "");
+});
+
+if (nasPatrolRunBtn) {
+  nasPatrolRunBtn.addEventListener("click", async () => {
+    nasPatrolRunBtn.disabled = true;
+    setStatus(false, "正在执行巡检推送...");
+    try {
+      const res = await fetch("api/nas-patrol/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: "{}",
+      });
+      const text = await res.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch (e) { json = null; }
+      if (res.ok && json && json.ok) {
+        showToast(true, json.message || "巡检已推送");
+      } else {
+        showToast(false, (json && json.message) ? json.message : ("巡检失败：" + (text ? text.slice(0, 160) : "")));
+      }
+    } catch (e) {
+      console.error(e);
+      showToast(false, "巡检请求失败，请稍后重试");
+    } finally {
+      nasPatrolRunBtn.disabled = false;
+      setStatus(false, "");
+    }
+  });
+}
+
+window.addEventListener("load", () => {
+  initTheme();
+  initAuth();
+  setInterval(loadPushStats, 30000);
+});
