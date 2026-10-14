@@ -4,6 +4,14 @@ version = "2.7.0"
 description = "FN Message Bots"
 readme = "README.md"
 requires-python = ">=3.9"
+# 署名：本仓库为 Sunanang/FNMessageBots 的 fork，此处的 authors 指本 fork 的维护者。
+# 上游原始作品的版权声明保留在 LICENSE 中，MIT 要求逐字保留，请勿删除或替换。
+authors = [
+    { name = "Young-ZJ66" },
+]
+# 指向 LICENSE 文件本身而非在此重复许可名称：该文件同时包含上游原始版权声明
+# 与本仓库沿用的 MIT 条款，是唯一权威来源。
+license = { file = "LICENSE" }
 dependencies = [
     "requests>=2.31.0",
     "urllib3>=1.26.0",
