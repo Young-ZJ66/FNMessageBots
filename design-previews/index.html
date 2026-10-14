@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FNMessageBots · 5 个设计方向对比</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f5f7; --surface: #ffffff; --border: #d2d2d7;
+    --text: #1d1d1f; --muted: #6e6e73; --accent: #0062c4; --on-accent: #fff;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+            "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 40px 24px 64px; }
+  h1 { font-size: 28px; letter-spacing: -.02em; margin: 0 0 6px; }
+  .lead { color: var(--muted); margin: 0 0 8px; }
+  .meta { color: var(--muted); font-size: 13px; margin: 0 0 32px; }
+  .meta code { font-family: var(--mono); background: var(--surface); padding: 1px 5px;
+                border: 1px solid var(--border); border-radius: 4px; }
+  .notice { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+             padding: 14px 18px; margin: 0 0 32px; font-size: 13px; color: var(--muted); }
+  .notice b { color: var(--text); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+           padding: 24px; margin-bottom: 24px; }
+  .phead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .phead h2 { font-size: 19px; margin: 0; letter-spacing: -.015em; }
+  .phead code { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .pdesc { margin: 8px 0 10px; }
+  .pbul { margin: 0 0 16px; padding-left: 20px; color: var(--muted); font-size: 13px; }
+  .pacts { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .pbtn { display: inline-block; padding: 8px 14px; border: 1px solid var(--border);
+           border-radius: 999px; text-decoration: none; color: var(--text); font-size: 13px;
+           background: var(--bg); }
+  .pbtn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  /* 缩略预览：把 1500px 宽的页面缩到卡片内 */
+  .frame { position: relative; width: 100%; height: 520px; border: 1px solid var(--border);
+            border-radius: 10px; overflow: hidden; background: var(--surface); }
+  .frame iframe { position: absolute; top: 0; left: 0; width: 1500px; height: 1620px;
+                   border: 0; transform-origin: 0 0; }
+  @media (min-width: 1000px) { .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+                                .grid .card { margin-bottom: 0; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>FNMessageBots · 5 个设计方向</h1>
+  <p class="lead">内容完全一致，只有设计令牌（颜色/间距/圆角/字体）与视觉语言不同，便于公平对比。</p>
+  <p class="meta">产物由 <code>design-previews/_build.py</code> 生成 ·
+     溢出检测 <code>design-previews/_check.py</code>（5 文件 × 4 宽度 = 20 项全通过）</p>
+  <div class="notice">
+    <b>字体说明：</b>样稿用的是系统字体栈（不含 CDN、不含外部字体），所以中文部分在所有方向里
+    表现一致 —— 换成 Inter / Fira Code / JetBrains Mono 的收益主要在<b>数字、IP、时间戳、单位</b>上，
+    中文仍会回退到系统 CJK 字体。数字已全部开启 <code>tabular-nums</code>（等宽对齐）。
+  </div>
+  <div class="grid">
+    <article class="pcard">
+      <header class="phead">
+        <h2>Swiss Precision</h2>
+        <code>1-swiss.html</code>
+      </header>
+      <p class="pdesc">瑞士精确：靠排版、栅格与留白建立高级感，零装饰、零阴影、方角。</p>
+      <ul class="pbul"><li>字号阶梯 + 8px 基准间距</li><li>单强调色，深色模式零硬编码颜色</li><li>细 1px 分隔线代替卡片分组</li></ul>
+      <div class="pacts">
+        <a class="pbtn primary" href="1-swiss.html" target="_blank" rel="noopener">打开完整版（可切主题）</a>
+        <a class="pbtn" href="1-swiss.html?theme=dark" target="_blank" rel="noopener">深色</a>
+      </div>
+      <div class="frame">
+        <iframe src="1-swiss.html" title="Swiss Precision 预览" loading="lazy" scrolling="no"></iframe>
+      </div>
+    </article>
+    <article class="pcard">
+      <header class="phead">
+        <h2>Ops Console</h2>
+        <code>2-ops-console.html</code>
+      </header>
+      <p class="pdesc">运维控制台：颜色只承载状态语义，密度换效率。最贴合「这本来是监控工具」。</p>
+      <ul class="pbul"><li>左侧导航 + 状态色（严重/警告/正常/进行中）</li><li>等宽数字对齐，紧凑行高 + 斑马纹</li><li>开关用成功绿，语义一致</li></ul>
+      <div class="pacts">
+        <a class="pbtn primary" href="2-ops-console.html" target="_blank" rel="noopener">打开完整版（可切主题）</a>
+        <a class="pbtn" href="2-ops-console.html?theme=dark" target="_blank" rel="noopener">深色</a>
+      </div>
+      <div class="frame">
+        <iframe src="2-ops-console.html" title="Ops Console 预览" loading="lazy" scrolling="no"></iframe>
+      </div>
+    </article>
+    <article class="pcard">
+      <header class="phead">
+        <h2>Deep OLED</h2>
+        <code>3-deep-oled.html</code>
+      </header>
+      <p class="pdesc">近黑影院级深色：层级靠 1px 描边，发光只给状态。科技感最强，仅深色。</p>
+      <ul class="pbul"><li>底色 #020617，卡片靠描边分层</li><li>状态点带极轻发光，其余零发光</li><li>放弃浅色模式</li></ul>
+      <div class="pacts">
+        <a class="pbtn primary" href="3-deep-oled.html" target="_blank" rel="noopener">打开完整版（可切主题）</a>
+        <a class="pbtn" href="3-deep-oled.html?theme=dark" target="_blank" rel="noopener">深色</a>
+      </div>
+      <div class="frame">
+        <iframe src="3-deep-oled.html" title="Deep OLED 预览" loading="lazy" scrolling="no"></iframe>
+      </div>
+    </article>
+    <article class="pcard">
+      <header class="phead">
+        <h2>Calm Cyan</h2>
+        <code>4-calm-cyan.html</code>
+      </header>
+      <p class="pdesc">冷静青：浅色为底，低饱和青做科技感，柔和两级阴影。最干净体面。</p>
+      <ul class="pbul"><li>低饱和青 #0891b2 + 大量中性灰压住</li><li>柔和阴影 + 1px 描边（不是玻璃态）</li><li>hover 只改边框与底色，不位移</li></ul>
+      <div class="pacts">
+        <a class="pbtn primary" href="4-calm-cyan.html" target="_blank" rel="noopener">打开完整版（可切主题）</a>
+        <a class="pbtn" href="4-calm-cyan.html?theme=dark" target="_blank" rel="noopener">深色</a>
+      </div>
+      <div class="frame">
+        <iframe src="4-calm-cyan.html" title="Calm Cyan 预览" loading="lazy" scrolling="no"></iframe>
+      </div>
+    </article>
+    <article class="pcard">
+      <header class="phead">
+        <h2>Executive Bento</h2>
+        <code>5-bento.html</code>
+      </header>
+      <p class="pdesc">模块栅格概览：概览页一屏看全，其余页保持表单。苹果式克制灰阶。</p>
+      <ul class="pbul"><li>3+3 / 2+2+2 两行不等宽模块</li><li>KPI 数字放大到 56px（hero 卡）</li><li>卡片圆角 16px，hover 轻微抬升</li></ul>
+      <div class="pacts">
+        <a class="pbtn primary" href="5-bento.html" target="_blank" rel="noopener">打开完整版（可切主题）</a>
+        <a class="pbtn" href="5-bento.html?theme=dark" target="_blank" rel="noopener">深色</a>
+      </div>
+      <div class="frame">
+        <iframe src="5-bento.html" title="Executive Bento 预览" loading="lazy" scrolling="no"></iframe>
+      </div>
+    </article></div>
+</div>
+<script>
+  // 把 1500px 宽的预览等比缩放到卡片宽度
+  (function () {
+    function fit() {
+      document.querySelectorAll(".frame").forEach(function (f) {
+        var ifr = f.querySelector("iframe");
+        if (ifr) ifr.style.transform = "scale(" + (f.clientWidth / 1500) + ")";
+      });
+    }
+    fit();
+    window.addEventListener("resize", fit);
+    document.querySelectorAll(".frame iframe").forEach(function (ifr) {
+      ifr.addEventListener("load", fit);
+    });
+  })();
+</script>
+</body>
+</html>

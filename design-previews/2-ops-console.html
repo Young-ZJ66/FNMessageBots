@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<title>方向 2 · Ops Console（数据优先）</title>
+<!-- 内容与方向 1-5 完全一致，仅设计令牌与视觉语言不同；无 CDN、无外部字体。可按 ?theme=dark / ?theme=light 指定主题 -->
+<style>
+:root {
+--bg: #f5f5f5; --surface: #ffffff; --surface-2: #fafafa;
+  --border: #e2e2e2; --border-strong: #c4c4c4;
+  --text: #333333; --text-muted: #5b5b5b; --text-faint: #666666;
+  --accent: #2563eb; --accent-fg: #ffffff;
+  --ok: #15803d; --warn: #c2410c; --err: #dc2626; --info: #2563eb; --knob: #fff;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 28px;
+  --r: 3px; --fs-xs: 11px; --fs-sm: 12px; --fs-md: 12.5px; --fs-lg: 14px;
+  --rule: 1px solid var(--border);
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+          "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", sans-serif;
+}
+:root[data-theme="dark"] {
+--bg: #020617; --surface: #0f172a; --surface-2: #131f38;
+  --border: #1e293b; --border-strong: #334155;
+  --text: #e6edf7; --text-muted: #93a4bd; --text-faint: #8b9ab0;
+  --accent: #3b82f6; --accent-fg: #04122c;
+  --ok: #22c55e; --warn: #f97316; --err: #ef4444; --info: #3b82f6;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; }
+body { font: 13px/1.5 var(--sans); background: var(--bg); color: var(--text);
+       -webkit-font-smoothing: antialiased; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.dim { color: var(--text-faint); }
+.ok { color: var(--ok); } .err { color: var(--err); }
+.grow { flex: 1; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px var(--sp-3) 10px 0; }
+th { font-size: var(--fs-sm); font-weight: 500; color: var(--text-muted); }
+td.r, th.r { text-align: right; padding-right: 0; }
+tbody tr:last-child td { border-bottom: none; }
+.c-name { width: 112px; } .c-st { width: 104px; } .c-last { width: 90px; }
+.c-rate { width: 92px; } .c-time { width: 84px; } .c-ch { width: 168px; } .c-res { width: 68px; }
+/* 兜底：窄屏表格允许自身横向滚动，避免撑破整页（整页横向滚动条是硬伤） */
+.tblwrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tgt { font-family: var(--mono); font-size: var(--fs-sm); color: var(--text-muted);
+       display: block; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); white-space: nowrap; }
+.st::before { content: ""; width: 7px; height: 7px; flex: none; background: currentColor; }
+.st.on { color: var(--ok); } .st.off { color: var(--text-faint); }
+.st.warn { color: var(--warn); } .st.err { color: var(--err); }
+.btn { font: 500 13px/1 var(--sans); color: var(--text); background: transparent;
+       border: 1px solid var(--border-strong); border-radius: var(--r); padding: 9px 16px;
+       cursor: pointer; transition: background-color .18s ease, border-color .18s ease,
+       color .18s ease, transform .18s ease; }
+.btn:hover { background: var(--surface); }
+.btn-primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.iconbtn { display: inline-flex; align-items: center; gap: 6px; }
+.sec-head { display: flex; align-items: baseline; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.sec-title { margin: 0; }
+.sec-note { margin-left: auto; font-size: var(--fs-sm); color: var(--text-muted); }
+.grid2 { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--sp-5); }
+.c7 { grid-column: span 7; } .c5 { grid-column: span 5; }
+.sw { position: relative; cursor: pointer; flex: none; }
+.sw::after { content: ""; position: absolute; transition: transform .18s ease, background-color .18s ease; }
+.sw[aria-checked="true"]::after { }
+/* 关键：`1fr` 隐含 min-content 下限，内容一挤就撑破容器（实测「定时巡检」小卡会溢出被裁）。
+   统一用 minmax(0, 1fr) 允许收缩，auto-fit 让列数不足时自动换行。 */
+.patrol { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: var(--sp-4); }
+.patrol-item { min-width: 0; }
+.patrol-item .k { font-size: var(--fs-sm); color: var(--text-muted); }
+.patrol-item .v { font-size: var(--fs-lg); margin-top: 2px; }
+.note { font-size: var(--fs-sm); margin: var(--sp-4) 0 0; }
+.events { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--sp-6); }
+.ev { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+.ev-text { flex: 0 0 236px; min-width: 0; }
+.ev-name { display: block; font-size: var(--fs-md); }
+.ev-id { display: block; font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-faint);
+         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--sp-4); }
+.tile { padding: var(--sp-4); min-width: 0; }
+.span-2 { grid-column: span 2; } .span-3 { grid-column: span 3; }
+.kpi-k { font-size: var(--fs-sm); color: var(--text-muted); }
+.kpi-v { font-weight: 500; margin-top: var(--sp-2); }
+.kpi-s { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 2px; }
+footer { padding: var(--sp-5) 0 var(--sp-6); color: var(--text-faint); font-size: var(--fs-sm); }
+@media (max-width: 700px) {
+  /* 窄屏优先保证「渠道 / 状态 / 最近推送」可读，隐藏最宽也最次要的两列 */
+  .c-tgt, .c-tgt-cell, .c-rate, .c-rate-cell { display: none; }
+  .c-name, .c-st, .c-last, .c-time, .c-ch, .c-res { width: auto; }
+  .tgt { max-width: none; }
+}
+@media (max-width: 900px) {
+  .kpis, .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .span-2, .span-3 { grid-column: span 2 !important; }
+  .events { grid-template-columns: minmax(0, 1fr); }
+  .ev-text { flex: 0 0 160px; }
+  .c7, .c5 { grid-column: span 12; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+.shell { display: grid; grid-template-columns: 236px 1fr; min-height: 100vh; }
+.side { background: var(--surface); border-right: var(--rule); display: flex;
+        flex-direction: column; padding: var(--sp-4); gap: var(--sp-5); position: sticky;
+        top: 0; height: 100vh; }
+.side-brand { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-2) var(--sp-3); }
+.brand { font-size: 14px; font-weight: 600; }
+.ver { font-size: var(--fs-sm); color: var(--text-faint); }
+.nav { display: flex; flex-direction: column; gap: 2px; }
+.nav-item { display: block; padding: 8px var(--sp-3); border-radius: var(--r); font-size: var(--fs-md);
+            color: var(--text-muted); text-decoration: none; border-left: 2px solid transparent; }
+.nav-item:hover { background: var(--surface-2); color: var(--text); }
+.nav-item.active { background: var(--surface-2); color: var(--text); font-weight: 600;
+                   border-left-color: var(--accent); }
+.side-foot { margin-top: auto; font-size: var(--fs-sm); color: var(--text-faint); padding: var(--sp-3); }
+.main { min-width: 0; background: var(--bg); }
+.topbar { background: var(--surface); border-bottom: var(--rule); position: sticky; top: 0; z-index: 5; }
+.topbar-in { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-5); }
+.topbar .brand { display: none; } .topbar .ver { display: none; }
+.wrap { padding: 0 var(--sp-5); }
+section { padding: var(--sp-5) 0; }
+.sec-head { margin-bottom: var(--sp-3); }
+.sec-no { display: none; }
+.sec-title { font-size: 15px; font-weight: 600; }
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--sp-3); }
+.kpi { background: var(--surface); border: var(--rule); border-radius: var(--r); padding: var(--sp-3); }
+.kpi-v { font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
+th, td { border-bottom: var(--rule); }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; padding-top: 6px; padding-bottom: 6px; }
+td { padding-top: 7px; padding-bottom: 7px; }
+tbody tr:hover td { background: var(--surface-2); }
+tbody tr:nth-child(even) td { background: var(--surface); }
+tbody tr:nth-child(even):hover td { background: var(--surface-2); }
+.tgt { max-width: 260px; }
+.sw { width: 32px; height: 17px; border: 1px solid var(--border-strong); background: var(--surface-2);
+      border-radius: 999px; }
+.sw::after { top: 2px; left: 2px; width: 11px; height: 11px; background: var(--text-faint);
+             border-radius: 999px; }
+.sw[aria-checked="true"] { background: var(--ok); border-color: var(--ok); }
+.sw[aria-checked="true"]::after { transform: translateX(15px); background: var(--knob); }
+.ev { padding: 9px 0; border-bottom: var(--rule); }
+.patrol-item { background: var(--surface); border: var(--rule); border-radius: var(--r);
+               padding: var(--sp-3); }
+.patrol-item .v { font-size: 18px; font-weight: 600; }
+.c7 { grid-column: span 7; } .c5 { grid-column: span 5; }
+@media (max-width: 860px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .side { position: static; height: auto; flex-direction: row; align-items: center;
+          gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); border-right: none;
+          border-bottom: var(--rule); overflow-x: auto; }
+  .side-brand { padding: 0 var(--sp-2) 0 0; flex: none; }
+  .side-brand .ver { display: none; }
+  .nav { flex-direction: row; gap: var(--sp-1); }
+  .nav-item { padding: 6px 10px; white-space: nowrap; }
+  .nav-item.active { border-left: none; }
+  .side-foot { display: none; }
+  .topbar .brand, .topbar .ver { display: inline !important; }
+  .sec-head { flex-wrap: wrap; row-gap: var(--sp-1); }
+  .sec-note { margin-left: 0; flex: 1 0 100%; }
+}
+</style>
+</head>
+<body>
+<div class="shell"><aside class="side"><div class="side-brand"><span class="brand">飞牛NAS 日志监控</span><span class="ver mono">v2.6.0</span></div><nav class="nav"><a class="nav-item active" href="#">概览</a><a class="nav-item" href="#">推送渠道</a><a class="nav-item" href="#">监控事件</a><a class="nav-item" href="#">通知策略</a><a class="nav-item" href="#">定时巡检</a><a class="nav-item" href="#">推送记录</a></nav><div class="side-foot">FnMessageBot · MIT</div></aside><div class="main"><div class="topbar"><div class="wrap topbar-in"><span class="brand">飞牛NAS 日志监控</span><span class="ver mono">v2.6.0</span><span class="grow"></span><button class="btn iconbtn" id="theme" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>切换主题</button><button class="btn btn-primary" type="button">保存配置</button></div></div><main class="wrap"><section><div class="sec-head"><span class="sec-no mono">01</span><h2 class="sec-title">推送概览</h2><span class="sec-note">统计窗口：今日 00:00 起</span></div><div class="kpis"><div class="kpi"><div class="kpi-k">今日推送</div><div class="kpi-v num">128</div><div class="kpi-s"><span class="ok">成功 126</span><span class="err">失败 2</span></div></div><div class="kpi"><div class="kpi-k">累计推送</div><div class="kpi-v num">12,486</div><div class="kpi-s">自 2025-09-27 起</div></div><div class="kpi"><div class="kpi-k">活跃渠道</div><div class="kpi-v num">5/8</div><div class="kpi-s">3 个未配置</div></div><div class="kpi"><div class="kpi-k">监控事件</div><div class="kpi-v num">23</div><div class="kpi-s">共 96 类可选</div></div><div class="kpi"><div class="kpi-k">连续运行</div><div class="kpi-v num">14d 6h</div><div class="kpi-s">上次重启 10-01</div></div></div></section><section><div class="sec-head"><span class="sec-no mono">02</span><h2 class="sec-title">推送渠道</h2><span class="sec-note">密钥已打码显示，留空表示不修改</span></div><div class="tblwrap"><table><thead><tr><th class="c-name">渠道</th><th class="c-st">状态</th><th class="c-tgt">目标地址</th><th class="r c-last">最近推送</th><th class="r c-rate">24h 成功率</th></tr></thead><tbody><tr><td class="c-name">企业微信</td><td class="c-st"><span class="st on">已启用</span></td><td class="c-tgt-cell"><span class="tgt">https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=693a91***</span></td><td class="r mono c-last-cell">2 分钟前</td><td class="r num c-rate-cell">100%</td></tr><tr><td class="c-name">钉钉</td><td class="c-st"><span class="st on">已启用</span></td><td class="c-tgt-cell"><span class="tgt">https://oapi.dingtalk.com/robot/send?access_token=d1f8a0***</span></td><td class="r mono c-last-cell">2 分钟前</td><td class="r num c-rate-cell">100%</td></tr><tr><td class="c-name">飞书</td><td class="c-st"><span class="st warn">降级纯文本</span></td><td class="c-tgt-cell"><span class="tgt">https://open.feishu.cn/open-apis/bot/v2/hook/2c9e41***</span></td><td class="r mono c-last-cell">15 分钟前</td><td class="r num c-rate-cell">98%</td></tr><tr><td class="c-name">Bark</td><td class="c-st"><span class="st on">已启用</span></td><td class="c-tgt-cell"><span class="tgt">https://api.day.app/7Kq2mN***</span></td><td class="r mono c-last-cell">1 小时前</td><td class="r num c-rate-cell">100%</td></tr><tr><td class="c-name">PushPlus</td><td class="c-st"><span class="st off">未配置</span></td><td class="c-tgt-cell"><span class="tgt dim">—</span></td><td class="r mono c-last-cell">—</td><td class="r num c-rate-cell">—</td></tr><tr><td class="c-name">SMTP 邮件</td><td class="c-st"><span class="st on">已启用</span></td><td class="c-tgt-cell"><span class="tgt">smtp.qq.com:465 → 1600386893@qq.com</span></td><td class="r mono c-last-cell">3 小时前</td><td class="r num c-rate-cell">100%</td></tr><tr><td class="c-name">通用 Webhook</td><td class="c-st"><span class="st off">未配置</span></td><td class="c-tgt-cell"><span class="tgt dim">—</span></td><td class="r mono c-last-cell">—</td><td class="r num c-rate-cell">—</td></tr><tr><td class="c-name">MeoW</td><td class="c-st"><span class="st on">已启用</span></td><td class="c-tgt-cell"><span class="tgt">youngzj</span></td><td class="r mono c-last-cell">昨天 21:04</td><td class="r num c-rate-cell">96%</td></tr></tbody></table></div></section><section><div class="sec-head"><span class="sec-no mono">03</span><h2 class="sec-title">监控事件</h2><span class="sec-note">已选 6 / 96</span></div><div class="events"><div class="ev"><span class="ev-text"><span class="ev-name">登录成功</span><span class="ev-id">LoginSucc</span></span><span class="sw" role="switch" aria-checked="true" tabindex="0" aria-label="登录成功"></span></div><div class="ev"><span class="ev-text"><span class="ev-name">登录失败</span><span class="ev-id">LoginFail</span></span><span class="sw" role="switch" aria-checked="true" tabindex="0" aria-label="登录失败"></span></div><div class="ev"><span class="ev-text"><span class="ev-name">SSH 登录失败</span><span class="ev-id">SSH_AUTH_FAILED</span></span><span class="sw" role="switch" aria-checked="true" tabindex="0" aria-label="SSH 登录失败"></span></div><div class="ev"><span class="ev-text"><span class="ev-name">磁盘 IO 错误</span><span class="ev-id">DISK_IO_ERR</span></span><span class="sw" role="switch" aria-checked="true" tabindex="0" aria-label="磁盘 IO 错误"></span></div><div class="ev"><span class="ev-text"><span class="ev-name">UPS 切换电池</span><span class="ev-id">UPS_ONBATT</span></span><span class="sw" role="switch" aria-checked="true" tabindex="0" aria-label="UPS 切换电池"></span></div><div class="ev"><span class="ev-text"><span class="ev-name">应用崩溃</span><span class="ev-id">APP_CRASH</span></span><span class="sw" role="switch" aria-checked="true" tabindex="0" aria-label="应用崩溃"></span></div><div class="ev"><span class="ev-text"><span class="ev-name">影视资源新增</span><span class="ev-id">TRIM_RESOURCE_ADDED</span></span><span class="sw" role="switch" aria-checked="false" tabindex="0" aria-label="影视资源新增"></span></div><div class="ev"><span class="ev-text"><span class="ev-name">Docker 容器停止</span><span class="ev-id">DOCKER_CONTAINER_STOP</span></span><span class="sw" role="switch" aria-checked="false" tabindex="0" aria-label="Docker 容器停止"></span></div></div></section><section><div class="grid2"><div class="c7"><div class="sec-head"><span class="sec-no mono">04</span><h2 class="sec-title">最近推送</h2></div><div class="tblwrap"><table><thead><tr><th class="c-time">时间</th><th>事件</th><th class="c-ch">渠道</th><th class="r c-res">结果</th></tr></thead><tbody><tr><td class="mono">22:14:07</td><td>登录成功</td><td class="dim">企业微信 · 钉钉</td><td class="r"><span class="st on">成功</span></td></tr><tr><td class="mono">21:48:33</td><td>磁盘 IO 错误</td><td class="dim">企业微信 · Bark · SMTP</td><td class="r"><span class="st on">成功</span></td></tr><tr><td class="mono">20:02:11</td><td>影视资源新增</td><td class="dim">飞书</td><td class="r"><span class="st warn">已回退</span></td></tr><tr><td class="mono">18:37:52</td><td>Docker 容器停止</td><td class="dim">Bark · MeoW</td><td class="r"><span class="st err">失败</span></td></tr></tbody></table></div></div><div class="c5"><div class="sec-head"><span class="sec-no mono">05</span><h2 class="sec-title">定时巡检</h2></div><div class="patrol"><div class="patrol-item"><div class="k">CPU</div><div class="v num">12%</div></div><div class="patrol-item"><div class="k">内存</div><div class="v num">34%</div></div><div class="patrol-item"><div class="k">系统盘</div><div class="v num">41%</div></div><div class="patrol-item"><div class="k">CPU 温度</div><div class="v num">42°C</div></div><div class="patrol-item"><div class="k">数据卷</div><div class="v num">63%</div></div></div><p class="dim note">下次巡检 10-15 09:00 · 上次 10-14 09:00 · 全部正常</p></div></div></section><footer>FnMessageBot · MIT License · 方向 2 · Ops Console（数据优先）</footer></main></div></div>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById("theme");
+    // 支持 ?theme=dark / ?theme=light 直接指定，便于分享与截图
+    var q = new URLSearchParams(location.search).get("theme");
+    if (q === "dark" || q === "light") { root.dataset.theme = q; }
+    else {
+      try { var s = localStorage.getItem("preview-theme"); if (s) root.dataset.theme = s; } catch (e) {}
+    }
+    if (btn) btn.addEventListener("click", function () {
+      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+      try { localStorage.setItem("preview-theme", root.dataset.theme); } catch (e) {}
+    });
+    document.querySelectorAll(".sw").forEach(function (sw) {
+      function toggle() {
+        sw.setAttribute("aria-checked",
+          sw.getAttribute("aria-checked") === "true" ? "false" : "true");
+      }
+      sw.addEventListener("click", toggle);
+      sw.addEventListener("keydown", function (e) {
+        if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(); }
+      });
+    });
+  })();
+</script>
+
+</body>
+</html>
