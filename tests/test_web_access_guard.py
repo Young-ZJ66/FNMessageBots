@@ -46,6 +46,10 @@ class EnvIsolatedCase(unittest.TestCase):
             [sys.executable, "-c", code],
             capture_output=True,
             text=True,
+            # 子进程会打印中文（初始化码提示、鉴权关闭提示等）。不指定编码时
+            # Windows 默认用 GBK 解码 UTF-8 输出，会 UnicodeDecodeError 或产生乱码。
+            encoding="utf-8",
+            errors="replace",
             env=env,
             cwd=str(_ROOT),
             timeout=60,
@@ -81,6 +85,10 @@ class EnvIsolatedCase(unittest.TestCase):
             [sys.executable, "-c", code],
             capture_output=True,
             text=True,
+            # 子进程会打印中文（初始化码提示、鉴权关闭提示等）。不指定编码时
+            # Windows 默认用 GBK 解码 UTF-8 输出，会 UnicodeDecodeError 或产生乱码。
+            encoding="utf-8",
+            errors="replace",
             env=env,
             cwd=str(_ROOT),
             timeout=60,
