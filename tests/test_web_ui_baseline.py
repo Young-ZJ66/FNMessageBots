@@ -267,6 +267,98 @@ class TemplateStaticCase(unittest.TestCase):
             with self.subTest(template=name):
                 self.assertEqual(dupes, [], f"{name} 存在重复 id: {dupes}")
 
+    def test_ids_referenced_by_js_exist(self):
+        """JS 取用的 id，必须能由模板静态声明、或由 JS 自己用字符串生成。
+
+        这是重构 UI 最危险的耦合点：改掉或删掉一个 id，JS 不会报错——
+        它只是拿到 null 然后静默什么都不做。
+
+        两种来源都要算：
+        1) 模板里的 id="x"（绝大多数）；
+        2) JS 在**字符串里**拼出来的 id="x"（history.js 的详情面板就是这样：
+           先把 innerHTML 设好，再 getElementById 取用）。
+        早期版本只认第 1 种、且「JS 自建」只找 `.id=` 与 setAttribute，
+        于是把 history.js 的 detail-close 误判为缺失——正则范围过窄会给出错误结论。
+        """
+        js_refs = re.compile(
+            r'getElementById\(\s*"([^"]+)"|querySelector(?:All)?\(\s*"#([A-Za-z0-9_\-]+)"')
+        id_literal = re.compile(r"""\bid\s*=\s*["']([^"']+)["']""")
+
+        declared: Set[str] = set()
+        for _name, html in self.templates().items():
+            declared |= set(re.findall(r'\bid="([^"]+)"', html))
+
+        needed: Set[str] = set()
+        for _name, html in self.templates().items():
+            needed |= {m.group(1) or m.group(2) for m in js_refs.finditer(html)}
+        for js in self.scripts():
+            text = js.read_text(encoding="utf-8")
+            needed |= {m.group(1) or m.group(2) for m in js_refs.finditer(text)}
+            # JS 字符串里创建的 id 也算已声明
+            declared |= set(id_literal.findall(text))
+
+        self.assertGreater(len(needed), 20,
+                           f"只提取到 {len(needed)} 个 id 引用，范围或正则可能失效")
+        missing = sorted(needed - declared)
+        self.assertEqual(missing, [], f"JS 取用但无处声明的 id: {missing}")
+
+    def scripts(self) -> List[Path]:
+        return sorted((_ROOT / "assets" / "js").glob("*.js"))
+
+    def test_scripts_directory_exists(self):
+        self.assertTrue((_ROOT / "assets" / "js").is_dir(), "缺少 assets/js 目录")
+        self.assertTrue(self.scripts(), "assets/js 下没有脚本文件")
+
+    def test_templates_reference_existing_local_assets(self):
+        """模板引用的 <script src> 与 <link href> 必须真实存在。
+
+        外置资源后新增的故障类型：文件改名、漏拷、路径写错时页面不报错，
+        只是样式或脚本静默不生效。相对路径还要兼容统一网关前缀，不能改成绝对路径。
+        """
+        missing: List[str] = []
+        absolute: List[str] = []
+        for name, html in self.templates().items():
+            refs = re.findall(r'<script[^>]+src="([^"]+)"', html)
+            refs += re.findall(r'<link[^>]+href="([^"]+)"', html)
+            for ref in refs:
+                if ref.startswith(("http://", "https://", "//", "{{")):
+                    continue
+                if ref.startswith("/"):
+                    absolute.append(f"{name}: {ref}")
+                    continue
+                if not (_ROOT / ref.split("?")[0]).is_file():
+                    missing.append(f"{name}: {ref}")
+        self.assertEqual(missing, [], f"模板引用了不存在的资源: {missing}")
+        self.assertEqual(absolute, [],
+                         f"本地资源必须用相对路径（网关前缀兼容）: {absolute}")
+
+    def test_no_inline_style_or_script_blocks(self):
+        """样式与脚本应已外置；残留内联块会让两处定义并存、难以维护。"""
+        for name, html in self.templates().items():
+            with self.subTest(template=name):
+                self.assertEqual(re.findall(r"<style[^>]*>", html), [],
+                                 f"{name} 仍有内联 <style>")
+                inline = [a for a, _b in re.findall(r"<script([^>]*)>(.*?)</script>",
+                                                    html, re.S)
+                          if "src=" not in a]
+                self.assertEqual(inline, [], f"{name} 仍有内联 <script>")
+
+    def test_js_does_not_create_ids_it_later_looks_up(self):
+        """反向确认：目前没有任何 id 是 JS 动态创建后再取用的。
+
+        如果哪天出现了，上一条测试的「静态声明」前提就不成立，
+        需要把动态创建的 id 也纳入白名单——这条会先失败提示去处理。
+        """
+        js_refs = re.compile(r'getElementById\(\s*"([^"]+)"')
+        makes = re.compile(r'\.id\s*=\s*"([^"]+)"|setAttribute\(\s*"id"\s*,\s*"([^"]+)"')
+        for name, html in self.templates().items():
+            needed = set(js_refs.findall(html))
+            made = {m.group(1) or m.group(2) for m in makes.finditer(html)}
+            overlap = sorted(needed & made)
+            with self.subTest(template=name):
+                self.assertEqual(overlap, [],
+                                 f"{name} 中 JS 动态创建又被取用的 id: {overlap}")
+
     def test_local_asset_references_resolve(self):
         """模板引用的本地静态资源必须真实存在（重构换目录时最容易漏）。"""
         missing: List[str] = []
