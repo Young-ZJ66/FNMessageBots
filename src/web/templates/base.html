@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="{{ page_id|default('app') }}">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  {% if favicon_url %}
+  <link rel="icon" href="{{ favicon_url }}" />
+  {% endif %}
+  <title>{{ page_title|default('FnMessageBot') }}</title>
+  <!-- 样式与脚本都外置在 assets/ 下（相对路径，兼容统一网关的 /app/<name>/ 前缀）：
+       tokens.css 只定义设计令牌，app.css 是组件层，组件里不得出现硬编码颜色——
+       硬编码一处，深色模式就会漏掉那一处。
+       assets/js/ 按主题分模块，共享顶层作用域，因此文件之间不得重名。 -->
+  <link rel="stylesheet" href="assets/css/tokens.css" />
+  <link rel="stylesheet" href="assets/css/app.css" />
+  <link rel="stylesheet" href="assets/css/layout.css" />
+  {% block head %}{% endblock %}
+</head>
+<body>
+{% block body %}{% endblock %}
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- theme.js 在所有页面加载（内部对「无主题按钮」做了空值守卫），
+       这样深色模式的偏好在各页面之间保持一致。 -->
+  <script src="assets/js/theme.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

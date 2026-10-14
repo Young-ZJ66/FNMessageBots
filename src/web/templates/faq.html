@@ -1,23 +1,13 @@
-<!DOCTYPE html>
-<html lang="zh-CN" data-page="faq">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="robots" content="noindex, nofollow" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  {% if favicon_url %}
-  <link rel="icon" href="{{ favicon_url }}" />
-  {% endif %}
-  <title>常见问题 - FnMessageBot</title>
-  <!-- 样式已抽到 assets/css/：tokens.css 定义设计令牌，app.css 是组件层。
-       颜色一律走 var(--token)，深色模式只覆盖令牌，不再逐选择器覆盖。 -->
-  <link rel="stylesheet" href="assets/css/tokens.css" />
-  <link rel="stylesheet" href="assets/css/app.css" />
-</head>
-<body>
+{% extends "base.html" %}
+{% set page_id = "faq" %}
+{% set page_title = "常见问题 - FnMessageBot" %}
+
+{% block body %}
   <div class="page">
     <div class="card">
       <div class="faq-back-bar">
         <a class="btn btn-ghost" href="./">返回配置页</a>
+        <button type="button" class="theme-btn" id="theme-toggle-btn" title="切换到深色模式" aria-label="切换到深色模式">深色</button>
       </div>
       <div class="faq-wrap">
         <header class="hero">
@@ -182,7 +172,9 @@ sudo -u FnMessageBot test -r /var/run/docker.sock -a -w /var/run/docker.sock &am
       </div>
     </div>
   </div>
-  <!-- 脚本已拆到 assets/js/：按主题分文件，加载顺序即依赖顺序（共享顶层作用域，不得重名）-->
-  <script src="assets/js/faq.js"></script>
-</body>
-</html>
+{% endblock %}
+
+{# 本页除主题外不需要脚本。原模板里那段内联脚本只是自带的主题初始化，
+   而且只认 localStorage、会在 theme.js 之后把主题覆盖回去；
+   主题现由 base.html 的 theme.js 统一负责，故本页不再加载任何脚本。 #}
+

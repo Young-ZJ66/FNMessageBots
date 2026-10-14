@@ -1,22 +1,12 @@
-<!DOCTYPE html>
-<html lang="zh-CN" data-page="history">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="robots" content="noindex, nofollow" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  {% if favicon_url %}
-  <link rel="icon" href="{{ favicon_url }}" />
-  {% endif %}
-<title>推送记录 - FnMessageBot</title>
-  <!-- 样式已抽到 assets/css/：tokens.css 定义设计令牌，app.css 是组件层。
-       颜色一律走 var(--token)，深色模式只覆盖令牌，不再逐选择器覆盖。 -->
-  <link rel="stylesheet" href="assets/css/tokens.css" />
-  <link rel="stylesheet" href="assets/css/app.css" />
-</head>
-<body>
+{% extends "base.html" %}
+{% set page_id = "history" %}
+{% set page_title = "推送记录 - FnMessageBot" %}
+
+{% block body %}
   <main class="history-main">
       <div class="top-bar">
         <a class="btn btn-ghost" href="./">返回配置页</a>
+        <button type="button" class="theme-btn" id="theme-toggle-btn" title="切换到深色模式" aria-label="切换到深色模式">深色</button>
       </div>
       <h1>推送记录</h1>
       <p class="page-hint">最多存储一万条数据，超过限制会自动删除。</p>
@@ -43,9 +33,10 @@
       <div id="empty" class="empty" style="display:none;">暂无推送记录</div>
       <div class="more-wrap"><button type="button" id="btn-more" class="btn btn-ghost" style="display:none;">加载更多</button></div>
       <div id="detail-panel" class="detail-wrap" style="display:none;"></div>
-  <!-- 脚本已拆到 assets/js/：按主题分文件，加载顺序即依赖顺序（共享顶层作用域，不得重名）-->
-  <script src="assets/js/history.js"></script>
   </main>
   <p class="license-footer">{{ footer_text }}</p>
-</body>
-</html>
+{% endblock %}
+
+{% block scripts %}
+  <script src="assets/js/history.js"></script>
+{% endblock %}

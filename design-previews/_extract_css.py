@@ -301,7 +301,7 @@ def main() -> int:
     # ── 通用层 ──
     out.append("/* ── 通用：多个页面共用的规则 ───────────────────────────────────────────── */")
     for sel, body in common:
-        out.append(f"{sel} {{ {_map_colors(body, unresolved)} }}")
+        out.append(f"{sel} {{ {body} }}")
     out.append("")
 
     # ── 页面层 ──
@@ -315,13 +315,13 @@ def main() -> int:
                 continue
             seen.add((sel, page))
             prefix = f'[data-page="{page}"] ' if sel in PER_PAGE_CONFLICTS else ""
-            out.append(f"{prefix}{sel} {{ {_map_colors(body, unresolved)} }}")
+            out.append(f"{prefix}{sel} {{ {body} }}")
         mq = per_media[page]
         if mq:
             out.append("")
             for cond, sel, body in mq:
                 prefix = f'[data-page="{page}"] ' if sel in PER_PAGE_CONFLICTS else ""
-                out.append(f"@media {cond} {{ {prefix}{sel} {{ {_map_colors(body, unresolved)} }} }}")
+                out.append(f"@media {cond} {{ {prefix}{sel} {{ {body} }} }}")
         out.append("")
 
     if args.check:
@@ -330,6 +330,15 @@ def main() -> int:
             print(f"  {p}: 原 {len(original_sels[p])} 条，缺失 {len(miss)} 条 {miss[:5]}")
         print(f"  删除的深色覆盖规则: {len(dropped_dark)} 条")
         return 1 if any(missing.values()) else 0
+
+    if sum(len(v) for v in per_page.values()) == 0:
+        # 本脚本是一次性迁移工具：输入是模板里的内联 <style>。
+        # 内联样式已外置之后重跑它只能读到 0 条规则——此时**绝不能写文件**，
+        # 否则会把已成型（现已转为手工维护）的 app.css 清空。实测覆盖过一次。
+        print("拒绝写出：模板里已无内联 <style>，本次提取到 0 条规则。")
+        print(f"  {_OUT.relative_to(_ROOT)} 未被改动。")
+        print("  本脚本只适用于「内联样式尚未外置」的历史状态；app.css 现由手工维护。")
+        return 3
 
     _OUT.write_text("\n".join(out) + "\n", encoding="utf-8")
     print(f"已写出 {_OUT.relative_to(_ROOT)}")

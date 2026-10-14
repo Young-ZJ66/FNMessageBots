@@ -281,7 +281,8 @@ class TemplateStaticCase(unittest.TestCase):
         于是把 history.js 的 detail-close 误判为缺失——正则范围过窄会给出错误结论。
         """
         js_refs = re.compile(
-            r'getElementById\(\s*"([^"]+)"|querySelector(?:All)?\(\s*"#([A-Za-z0-9_\-]+)"')
+            r'getElementById\(\s*"([^"]+)"\s*\)'          # 必须是完整字面量
+            r'|querySelector(?:All)?\(\s*"#([A-Za-z0-9_\-]+)"')
         id_literal = re.compile(r"""\bid\s*=\s*["']([^"']+)["']""")
 
         declared: Set[str] = set()
@@ -375,6 +376,173 @@ class TemplateStaticCase(unittest.TestCase):
                 else:
                     missing.append(f"{name}: {ref}")
         self.assertEqual(missing, [], f"模板引用了不存在的资源: {missing}")
+
+
+def _top_level_names(js: str) -> Set[str]:
+    """挑出脚本在**顶层**声明的名字（function / const / let / var）。
+
+    为什么要按花括号深度走一遍、而不是按行首缩进判断：
+    实际踩过一次——history.js 里 `  var THEME_STORAGE_KEY`（缩进 2 空格）
+    与 theme.js 的顶层 `const THEME_STORAGE_KEY` 同名。经典脚本共享全局词法环境，
+    已有 const 绑定时再 var 同名会抛 SyntaxError，**整个 history.js 都不执行**，
+    列表与筛选静默失效。按缩进判断会漏掉这种带缩进的声明。
+
+    这是启发式而非解析器：字符串与注释被跳过，但模板字符串里的 ${} 会被当成花括号
+    计入深度，可能造成偏差。因此调用方会先断言「提取到的名字数量在合理区间」，
+    以免启发式失效时测试变成空过。
+    """
+    names: Set[str] = set()
+    depth = 0
+    i = 0
+    n = len(js)
+    quote: str = ""
+    line_comment = False
+    block_comment = False
+    decl = re.compile(
+        r"(?:async\s+)?function\s+([A-Za-z_$][\w$]*)"
+        r"|(?:const|let|var)\s+([A-Za-z_$][\w$]*)")
+    while i < n:
+        if line_comment:
+            if js[i] == "\n":
+                line_comment = False
+            i += 1
+            continue
+        if block_comment:
+            if js.startswith("*/", i):
+                block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+        if quote:
+            if js[i] == "\\":
+                i += 2
+                continue
+            if js[i] == quote:
+                quote = ""
+            i += 1
+            continue
+        two = js[i:i + 2]
+        if two == "//":
+            line_comment = True
+            i += 2
+            continue
+        if two == "/*":
+            block_comment = True
+            i += 2
+            continue
+        c = js[i]
+        if c in "\"'`":
+            quote = c
+            i += 1
+            continue
+        if c == "{":
+            depth += 1
+            i += 1
+            continue
+        if c == "}":
+            depth = max(0, depth - 1)
+            i += 1
+            continue
+        if depth == 0:
+            m = decl.match(js, i)
+            if m:
+                names.add(m.group(1) or m.group(2))
+                i = m.end()
+                continue
+        i += 1
+    return names
+
+
+def _strip_js_comments(js: str) -> str:
+    """去掉行注释与块注释，避免把注释里提到的关键字当成真实代码。"""
+    js = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+    return re.sub(r"(?m)//.*$", "", js)
+
+
+class ScriptScopeCase(unittest.TestCase):
+    """外置脚本共享顶层作用域（无 IIFE），因此**同名声明会让后者整个不执行**。
+
+    这是浏览器里静默失败的一种：控制台之外没有提示，页面只是少了功能。
+    实测踩过一次（theme.js 的 const 与 history.js 的 var 同名），故固化为测试。
+    """
+
+    def scripts(self) -> List[Path]:
+        return sorted((_ROOT / "assets" / "js").glob("*.js"))
+
+    def loaded_per_page(self) -> Dict[str, List[Path]]:
+        """按模板求出每页实际加载的脚本（含 base.html 里的 theme.js）。"""
+        base = (_TEMPLATES / "base.html").read_text(encoding="utf-8")
+        base_scripts = re.findall(r'<script[^>]+src="assets/js/([^"]+)"', base)
+        pages: Dict[str, List[Path]] = {}
+        for p in sorted(_TEMPLATES.glob("*.html")):
+            html = p.read_text(encoding="utf-8")
+            names = list(base_scripts) + re.findall(
+                r'<script[^>]+src="assets/js/([^"]+)"', html)
+            # 去重且保序
+            seen: Set[str] = set()
+            files = []
+            for n in names:
+                if n in seen:
+                    continue
+                seen.add(n)
+                files.append(_ROOT / "assets" / "js" / n)
+            if files:
+                pages[p.name] = files
+        return pages
+
+    def test_every_referenced_script_exists(self):
+        missing = [f.name for files in self.loaded_per_page().values()
+                   for f in files if not f.is_file()]
+        self.assertEqual(sorted(set(missing)), [], f"模板引用了不存在的脚本: {missing}")
+
+    def test_no_top_level_name_collision_within_a_page(self):
+        pages = self.loaded_per_page()
+        self.assertTrue(pages, "没有解析到任何页面加载脚本")
+        problems: List[str] = []
+        for page, files in pages.items():
+            owner: Dict[str, str] = {}
+            for f in files:
+                if not f.is_file():
+                    continue
+                for name in sorted(_top_level_names(f.read_text(encoding="utf-8"))):
+                    if name in owner and owner[name] != f.name:
+                        problems.append(f"{page}: {name} 同时声明于 {owner[name]} 与 {f.name}")
+                    else:
+                        owner[name] = f.name
+        self.assertEqual(problems, [],
+                         "顶层同名声明会让后加载的文件整个不执行：\n  " + "\n  ".join(problems))
+
+    def test_scope_extraction_is_not_vacuous(self):
+        """启发式失效时必须失败，而不是静默通过。"""
+        total = sum(len(_top_level_names(f.read_text(encoding="utf-8")))
+                    for f in self.scripts())
+        # 实测约 60 个；留出余量，但明显偏少即说明启发式已失效
+        self.assertGreaterEqual(total, 50,
+                                f"只提取到 {total} 个顶层声明，启发式可能已失效")
+        theme = _top_level_names(
+            (_ROOT / "assets" / "js" / "theme.js").read_text(encoding="utf-8"))
+        for expect in ("THEME_STORAGE_KEY", "themeToggleBtn", "initTheme", "applyTheme"):
+            with self.subTest(name=expect):
+                self.assertIn(expect, theme)
+
+    def test_theme_ownership_is_single(self):
+        """主题设置只应由 theme.js 负责。
+
+        history.js / faq.js 原先各自带一段「读 localStorage 后设 data-theme」的代码：
+        既与 theme.js 重名（见上），又在 theme.js 之后执行、把主题覆盖回本地保存值，
+        导致 ?theme= 与深色模式在那些页面失效。
+        """
+        offenders: List[str] = []
+        for f in self.scripts():
+            if f.name == "theme.js":
+                continue
+            text = f.read_text(encoding="utf-8")
+            code = _strip_js_comments(text)
+            if 'setAttribute("data-theme"' in code or "data-theme" in code:
+                offenders.append(f.name)
+        self.assertEqual(offenders, [],
+                         f"主题只应由 theme.js 设置，以下文件也在改 data-theme: {offenders}")
 
 
 class WebUiBaselineCase(unittest.TestCase):

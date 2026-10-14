@@ -45,7 +45,15 @@ CHROME_CANDIDATES = [
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
 ]
 
-PAGES = [("/", "index"), ("/history", "history"), ("/faq", "faq")]
+PAGES = [
+    ("/", "index"),
+    ("/?tab=channels", "index-channels"),
+    ("/?tab=events", "index-events"),
+    ("/?tab=policy", "index-policy"),
+    ("/?tab=patrol", "index-patrol"),
+    ("/history", "history"),
+    ("/faq", "faq"),
+]
 
 # 内容尽量覆盖各组件：多种状态的渠道行、开关的开/关、各分类事件
 DEMO_CONFIG = {

@@ -2,20 +2,19 @@
    ----------------------------------------------------------------------------
    推送记录页：列表、筛选、加载更多、详情面板
 
-   由 design-previews/_extract_js.py 从模板内联 <script> 提取。
-   提取时**未改动任何逻辑与标识符**，仅去掉原有的 4 空格整体缩进。
-   注意：这些文件之间共享顶层作用域（无 IIFE），因此**不得重名**；
-   脚本按模板中 <script src> 的顺序执行。
+   由 design-previews/_extract_js.py 从模板内联 <script> 提取，随后删除了其中
+   自带的主题初始化（原本读 localStorage 后设置 data-theme）。
+   现在主题统一由 theme.js 负责——它随 base.html 在所有页面加载，
+   并且支持 ?theme= 与按钮文案更新。
+
+   删除的原因不只是重复：该段声明了 var THEME_STORAGE_KEY，而 theme.js 声明了
+   同名的 const。经典脚本共享全局词法环境，已存在 const 绑定时再 var 同名会抛
+   SyntaxError，**整个 history.js 都不会执行**——列表与筛选会静默失效。
+
+   本文件与其它脚本共享顶层作用域（无 IIFE），不得重名。
    ========================================================================== */
 
 
-  var THEME_STORAGE_KEY = "fnmb_theme";
-  function applyHistoryTheme() {
-var mode = localStorage.getItem(THEME_STORAGE_KEY);
-var resolved = (mode === "dark") ? "dark" : "light";
-document.documentElement.setAttribute("data-theme", resolved);
-  }
-  applyHistoryTheme();
   var fetchOpts = { credentials: "include" };
   var offset = 0;
   var pageSize = 30;

@@ -82,6 +82,14 @@ def main() -> int:
     ap.add_argument("--check", action="store_true")
     args = ap.parse_args()
 
+    # 本脚本是一次性迁移工具：输入是模板里的内联 <script>。
+    # 脚本外置之后重跑它只能读到空内容——此时绝不能写文件，
+    # 否则会把 assets/js/*.js 全部清空。
+    if not any(_script_body(n).strip() for n in ("index.html", "history.html", "faq.html")):
+        print("拒绝写出：模板里已无内联 <script>，没有可提取的内容。")
+        print("  该脚本只适用于「内联脚本尚未外置」的历史状态。")
+        return 3
+
     if not args.check:
         _JS_DIR.mkdir(parents=True, exist_ok=True)
 

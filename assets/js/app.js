@@ -261,7 +261,9 @@ if (nasPatrolRunBtn) {
 }
 
 window.addEventListener("load", () => {
-  initTheme();
+  // 主题由 theme.js 自初始化（它会随 base.html 在所有页面加载），此处不再调用：
+  // 重复调用会给切换按钮绑第二次点击监听，导致切换互相抵消。
+  initTabs();  // 先确定显示哪个页签面板，再做鉴权判定与数据加载
   initAuth();
   setInterval(loadPushStats, 30000);
 });

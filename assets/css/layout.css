@@ -1,0 +1,249 @@
+/* ============================================================================
+   FnMessageBot · 应用外壳布局
+   ----------------------------------------------------------------------------
+   手写文件。与 app.css 的分工：
+     tokens.css  只定义设计令牌
+     app.css     从原内联样式提取的组件样式（生成文件，勿手改）
+     layout.css  本文件：外壳布局（侧栏 + 顶栏 + 页签），
+                 以及为适配新外壳对 app.css 旧规则的覆盖
+
+   为什么单独一个文件：app.css 由 design-previews/_extract_css.py 生成，
+   重跑提取器会覆盖它，手写新增放那里会丢。
+
+   规则：颜色一律 var(--token)，不得出现硬编码颜色（有测试守卫）。
+   ========================================================================== */
+
+/* ── 外壳 ──────────────────────────────────────────────────────────────────
+   注意：#app-main 的 display 由 auth.js 以内联样式控制（判定通过后设 flex，
+   未通过设 none）。内联优先于样式表，所以这里**不要**设 display，
+   让那个 flex 直接当侧栏布局的容器用。 */
+[data-page="index"] .page {
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 0;
+  background: var(--bg);
+}
+
+.side {
+  flex: 0 0 var(--sidebar-w);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  padding: var(--sp-5) var(--sp-3);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  box-sizing: border-box;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.side-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-3);
+  min-width: 0;
+}
+.side-brand .app-icon { width: 26px; height: 26px; border-radius: var(--r-sm); flex: none; }
+.side-brand-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.side-brand .brand {
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  letter-spacing: -.01em;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.side-brand .ver { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text-faint); }
+
+.nav { display: flex; flex-direction: column; gap: 2px; }
+.nav-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px var(--sp-3);
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: var(--fw-medium) var(--fs-md) / 1.4 var(--font-sans);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color var(--tr), color var(--tr);
+}
+.nav-item:hover { background: var(--surface-2); color: var(--text); }
+/* 当前页签：同时给出底色与文字色变化，不只靠颜色 —— 可读性更强，
+   也让键盘用户能通过 aria-current 感知（样式不依赖 aria 之外的信息）。 */
+.nav-item[aria-current="page"] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: var(--fw-semibold);
+}
+
+.side-foot {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-sm);
+}
+.side-foot .footer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  text-decoration: none;
+}
+.side-foot .footer-link:hover { color: var(--accent); text-decoration: underline; }
+.side-foot .footer-github-icon { width: 16px; height: 16px; flex: none; display: block; }
+.side-foot .footer-sep { color: var(--border-strong); user-select: none; }
+
+.main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+
+/* ── 顶栏 ── */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-6);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-title {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  letter-spacing: -.01em;
+  color: var(--text);
+}
+.grow { flex: 1; }
+
+/* 覆盖 app.css 里「底部吸附保存条」的旧样式：现在它是顶栏右侧的操作组 */
+[data-page="index"] .save-bar {
+  position: static;
+  padding: 0;
+  background: none;
+  margin: 0;
+  align-items: center;
+}
+.save-dirty-hint { display: none; }
+.save-bar.is-dirty .save-dirty-hint {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--fs-sm);
+  color: var(--warn);
+}
+.save-bar.is-dirty .btn-primary { box-shadow: 0 0 0 3px var(--ring-weak); }
+
+/* ── 按钮观感收敛 ──
+   提取出来的按钮样式是全圆角(pill) + 大范围青色外发光（box-shadow: 0 12px 22px）。
+   那在旧的居中卡片里尚可，放到顶栏与密集布局中就像一块光斑，也偏「消费级」。
+   Calm Cyan 要的是干净体面，故改为小圆角 + 无发光：
+   只在「有未保存更改」时给一圈明确的环形提示，那时它才是有意义的信号。 */
+.btn { border-radius: var(--r-sm); }
+.btn-primary {
+  background: var(--accent);
+  box-shadow: none;
+  transition: background-color var(--tr), box-shadow var(--tr);
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+  box-shadow: none;
+  transform: none;
+}
+.btn-danger, .add-btn { border-radius: var(--r-sm); }
+.add-btn { padding: 6px 12px; }
+
+/* 区块内的操作按钮左对齐：右对齐会让它跑到卡片另一侧，与上方说明脱节 */
+[data-page="index"] .section .footer-actions { justify-content: flex-start; }
+
+.theme-btn {
+  font: var(--fw-medium) var(--fs-sm) / 1 var(--font-sans);
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background-color var(--tr), color var(--tr), border-color var(--tr);
+}
+.theme-btn:hover { background: var(--surface-2); color: var(--text); }
+
+/* ── 内容区与页签 ── */
+.main-body { padding: var(--sp-6); display: flex; flex-direction: column; gap: var(--sp-5); }
+
+.tab { display: flex; flex-direction: column; gap: var(--sp-5); }
+/* hidden 属性的 UA 样式是 display:none，但会被上面的 display:flex 覆盖，
+   所以必须显式声明；否则隐藏的页签仍会显示。 */
+.tab[hidden] { display: none !important; }
+
+/* 覆盖旧规则：app.css 里 .section 用 --bg 作底色，而 .main 的底也是 --bg，
+   直接沿用会让卡片「消失」。改为 --surface 才能浮起来。 */
+[data-page="index"] .section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: var(--sp-5);
+  margin-bottom: 0;
+  box-shadow: var(--sh-1);
+}
+.stats-section, .test-section { margin: 0; }
+
+.warning-panel { margin: 0; }
+
+/* 顶栏里的操作组不要上边距（app.css 的 .footer-actions 带 margin-top:16px） */
+[data-page="index"] .topbar .footer-actions { margin-top: 0; }
+[data-page="index"] .section .footer-actions { margin-top: var(--sp-3); }
+
+/* ── 表单与网格的补充类 ──
+   这些类替代原先散落在模板里的内联 style，其中还包含一处硬编码颜色
+   （border-top: 1px solid #e5e7eb），那种内联写法深色模式下必然漏。 */
+.field-label-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  cursor: pointer;
+}
+.system-grid { gap: var(--sp-4) var(--sp-5); }
+.system-grid-narrow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.system-grid-single { grid-template-columns: minmax(0, 1fr); }
+
+.col-channel-type { width: 120px; }
+.col-channel-ops { width: 140px; }
+
+/* ── 窄屏：侧栏折叠为顶部横向导航条 ──
+   不折叠的话 236px 侧栏会把内容整段挤出视口（实测会出现整页横向偏移）。 */
+@media (max-width: 900px) {
+  [data-page="index"] .page { flex-direction: column; }
+  .side {
+    flex: none;
+    width: 100%;
+    height: auto;
+    position: static;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-2) var(--sp-4);
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .side-brand { padding: 0 var(--sp-2) 0 0; flex: none; }
+  .side-brand .ver { display: none; }
+  .nav { flex-direction: row; gap: var(--sp-1); }
+  .side-foot { display: none; }
+  .topbar { padding: var(--sp-3) var(--sp-4); }
+  .main-body { padding: var(--sp-4); }
+  .system-grid,
+  .system-grid-narrow { grid-template-columns: minmax(0, 1fr); }
+}

@@ -1,20 +1,11 @@
+{% extends "base.html" %}
+{% set page_id = "index" %}
+{% set page_title = "FnMessageBot" %}
 
-<!DOCTYPE html>
-<html lang="zh-CN" data-page="index">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="robots" content="noindex, nofollow" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  {% if favicon_url %}
-  <link rel="icon" href="{{ favicon_url }}" />
-  {% endif %}
-<title>FnMessageBot</title>
-  <!-- 样式已抽到 assets/css/：tokens.css 定义设计令牌，app.css 是组件层。
-       颜色一律走 var(--token)，深色模式只覆盖令牌，不再逐选择器覆盖。 -->
-  <link rel="stylesheet" href="assets/css/tokens.css" />
-  <link rel="stylesheet" href="assets/css/app.css" />
-</head>
-<body>
+{% block body %}
+  <!-- 鉴权门禁：未登录时只显示这一层；#app-main 保持 display:none 直到 auth.js 判定通过。
+       auth.js 用 style.display="flex" 显示它，因此外壳的 flex 布局就靠这个 inline 值，
+       不要在 CSS 里给 #app-main 设 display，否则会被 inline 覆盖或反之。 -->
   <div id="auth-gate" class="auth-page" style="display:none;">
     <div class="auth-card">
       <div id="auth-set-password" style="display:none;">
@@ -47,237 +38,271 @@
     </div>
     <p class="license-footer">{{ footer_text }}</p>
   </div>
+
   <div id="app-main" class="page" style="display:none;">
-    <div class="card">
-      <div class="header">
-        <div class="header-brand">
-          {% if icon_url %}
-          <img class="app-icon" src="{{ icon_url }}" alt="FnMessageBot" />
-          {% endif %}
-          <div class="header-title" id="app-title">FnMessageBot</div>
-          <div class="header-ver" id="app-version">{{ version }}</div>
-        </div>
-        <div class="theme-switcher">
-          <button type="button" class="theme-btn" id="theme-toggle-btn" title="切换到深色模式" aria-label="切换到深色模式">深色</button>
-        </div>
+    <aside class="side">
+      <div class="side-brand">
+        {% if icon_url %}
+        <img class="app-icon" src="{{ icon_url }}" alt="" width="26" height="26" decoding="async" />
+        {% endif %}
+        <span class="side-brand-text">
+          <span class="brand" id="app-title">FnMessageBot</span>
+          <span class="ver" id="app-version">{{ version }}</span>
+        </span>
       </div>
 
-      <div class="section stats-section">
-        <div class="channels-header">
-          <div class="section-title">
-            <span>推送数据汇总</span>
-          </div>
-          <button type="button" class="btn btn-ghost" onclick="window.location.href='history'">查看推送记录</button>
-        </div>
-        <div class="stats-grid">
-          <div class="stats-block">
-            <div class="stats-label">总推送</div>
-            <div class="stats-row">
-              <span class="stats-total">共 <strong id="stat-total-total">0</strong> 条</span>
-              <span class="stats-ok">成功 <strong id="stat-total-success">0</strong></span>
-              <span class="stats-fail">失败 <strong id="stat-total-fail">0</strong></span>
-            </div>
-          </div>
-          <div class="stats-block">
-            <div class="stats-label">当日推送</div>
-            <div class="stats-row">
-              <span class="stats-total">共 <strong id="stat-today-total">0</strong> 条</span>
-              <span class="stats-ok">成功 <strong id="stat-today-success">0</strong></span>
-              <span class="stats-fail">失败 <strong id="stat-today-fail">0</strong></span>
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- 页签切换与深链（?tab= / #tab）由 assets/js/tabs.js 处理。
+           「推送记录」是独立页面，故用链接而非页签。 -->
+      <nav class="nav" id="main-nav" aria-label="配置导航">
+        <button type="button" class="nav-item" data-tab="overview">概览</button>
+        <button type="button" class="nav-item" data-tab="channels">推送渠道</button>
+        <button type="button" class="nav-item" data-tab="events">监控事件</button>
+        <button type="button" class="nav-item" data-tab="policy">通知策略</button>
+        <button type="button" class="nav-item" data-tab="patrol">定时巡检</button>
+        <a class="nav-item" href="history">推送记录</a>
+      </nav>
 
-      <div class="section">
-        <div class="section-title">
-          <span>事件选择 <small>请选择需要监控并推送的事件；点击分组标题可折叠/展开</small></span>
-        </div>
-        <div class="event-anchor-bar" id="events-anchor-bar"></div>
-        <div class="events-by-category" id="events-container"></div>
-      </div>
-
-      <div class="section">
-        <div class="section-title">
-          <span>三方应用事件 <small>非NAS系统相关的三方类型相关事件</small></span>
-        </div>
-        <div class="events-by-category" id="third-party-events-container"></div>
-      </div>
-
-      <div class="section">
-        <div class="channels-header">
-          <div class="section-title">
-            <span>推送渠道 <small>支持为同一渠道配置多个 Webhook；关闭开关后保留配置但不推送</small></span>
-          </div>
-          <button class="add-btn" type="button" id="add-channel-btn">
-            <span>＋</span> 添加渠道
-          </button>
-        </div>
-        <div class="table-wrap">
-          <table class="channels-table">
-            <thead>
-            <tr>
-              <th style="width: 120px;">渠道类型</th>
-              <th>推送地址</th>
-              <th class="channel-ops-th" style="width: 140px;">操作</th>
-            </tr>
-            </thead>
-            <tbody id="channels-body"></tbody>
-          </table>
-          <input type="hidden" id="input-bark-icon" value="" />
-        </div>
-        <div class="field-helper" style="margin-top: 10px;">
-          渠道配置教程：
-          <a href="{{ docs_url }}" target="_blank" rel="noopener noreferrer">
-            推送渠道配置教程
-          </a>
-        </div>
-      </div>
-
-      <div class="section">
-        <div class="section-title">
-          <span>系统设置 <small>影响日志缓存与轮询行为</small></span>
-        </div>
-        <div class="system-grid">
-          <div>
-            <div class="field-label">日志缓存天数 (day)</div>
-            <input id="input-log-days" type="number" min="1" />
-            <div class="field-helper">原始推送日志的保留时长。</div>
-          </div>
-          <div>
-            <div class="field-label">数据库轮询时间 (s)</div>
-            <input id="input-poll-interval" type="number" min="1" />
-            <div class="field-helper">轮询日志数据库的间隔时间，过小会增加磁盘 IO。</div>
-          </div>
-          <div>
-            <div class="field-label" style="display: flex; align-items: center; gap: 8px;">
-              <input type="checkbox" id="input-resume-from-cursor" />
-              <span>重启后补推停机期间日志</span>
-            </div>
-            <div class="field-helper">默认关闭：启动时对齐当前库水位，只推送启动之后的新记录。开启后沿用上次保存的游标，把停机期间写入的日志补推一遍（短期重启不想漏事件时使用）。</div>
-          </div>
-          <div>
-            <div class="field-label">事件标题前缀</div>
-            <input id="input-title-prefix" type="text" placeholder="飞牛NAS" />
-            <div class="field-helper">默认「飞牛NAS」，内容为空则无前缀。</div>
-          </div>
-          <div>
-            <div class="field-label" style="display: flex; align-items: center; gap: 8px;">
-              <input type="checkbox" id="input-poll-batch-summary" />
-              <span>轮询汇总模式</span>
-            </div>
-            <div class="field-helper">开启后短时间内的多条事件合并为一条推送。若关闭，短时间内频繁推送可能触发渠道限流。</div>
-          </div>
-          <div>
-            <div class="field-label" style="display: flex; align-items: center; gap: 8px;">
-              <input type="checkbox" id="input-minimal-push-enabled" />
-              <span>极简推送</span>
-            </div>
-            <div class="field-helper">开启后推送消息将压缩为一行显示，仅展示关键信息</div>
-          </div>
-          <div>
-            <div class="field-label" style="display: flex; align-items: center; gap: 8px;">
-              <input type="checkbox" id="input-push-markdown-enabled" />
-              <span>结构化消息</span>
-            </div>
-            <div class="field-helper">企业微信与钉钉使用 markdown、飞书使用富文本，按行分条展示；Bark、PushPlus、SMTP、通用 Webhook 等不支持富文本的渠道仍发纯文本。渠道不支持时会自动回退纯文本，不影响送达。</div>
-          </div>
-          <div>
-            <div class="field-label" style="display: flex; align-items: center; gap: 8px;">
-              <input type="checkbox" id="input-media-batch-enabled" />
-              <span>影视/相册事件聚合推送</span>
-            </div>
-            <div class="field-helper">开启后，影视入库、相册分享等高频同类事件在静默窗口内合并为一条结构化消息，批量刮削入库不再刷屏。</div>
-            <div class="system-grid" style="grid-template-columns: 1fr 1fr; margin-top: 8px;">
-              <div>
-                <div class="field-label">聚合静默窗口（秒）</div>
-                <input id="input-media-batch-window" type="number" min="0" max="3600" step="10" />
-                <div class="field-helper">窗口内无新事件才发送；0 表示按轮询轮次立即发送。</div>
-              </div>
-              <div></div>
-            </div>
-          </div>
-          <div>
-            <div class="field-label" style="display: flex; align-items: center; gap: 8px;">
-              <input type="checkbox" id="input-ssh-ignore-loopback" />
-              <span>忽略本机 SSH 登录/断开</span>
-            </div>
-            <div class="field-helper">来源为 127.0.0.1 / ::1 的 SSH 登录成功与断开不推送（如 fnOS Web 终端、本机工具定时 SSH 自查），失败与无效用户告警仍会推送。<strong>通过 frp 等内网穿透访问 SSH 时来源同为本机，请勿开启。</strong></div>
-          </div>
-        </div>
-        <div class="dnd-section" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
-          <div class="field-label" style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-            <input type="checkbox" id="input-dnd-enabled" />
-            <span>勿扰模式</span>
-          </div>
-          <div class="field-helper" style="margin-bottom: 10px;">开启后，在设定时段内不推送消息；结束后将本时段事件汇总为一条推送。</div>
-          <div class="system-grid" style="grid-template-columns: 1fr 1fr;">
-            <div>
-              <div class="field-label">开始时间</div>
-              <input id="input-dnd-start" type="time" value="22:00" />
-              <div class="field-helper">如 22:00，该时刻起进入勿扰</div>
-            </div>
-            <div>
-              <div class="field-label">结束时间</div>
-              <input id="input-dnd-end" type="time" value="07:00" />
-              <div class="field-helper">如 07:00，跨日则到次日该时刻结束</div>
-            </div>
-          </div>
-        </div>
-        <div class="nas-patrol-section" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
-          <div class="field-label" style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-            <input type="checkbox" id="input-nas-patrol-enabled" />
-            <span>巡检任务</span>
-          </div>
-          <div class="field-helper" style="margin-bottom: 10px;">按 Cron 采集本机 CPU、内存与磁盘并推送；标题为「事件标题前缀-巡检任务完成」。首次开启会锚定当前时间，<strong>不会立刻推送</strong>，需等到下一次 Cron（例如 <code>*/10 * * * *</code> 最多等约 10 分钟）。可点下方按钮立即验证。</div>
-          <div class="system-grid" style="grid-template-columns: 1fr;">
-            <div>
-              <div class="field-label">巡检 Cron 表达式</div>
-              <input id="input-nas-patrol-cron" type="text" placeholder="0 12 * * *" value="0 12 * * *" autocomplete="off" />
-              <div class="field-helper">标准 5 段 Cron。示例：每天中午 <code>0 12 * * *</code>；每 10 分钟 <code>*/10 * * * *</code>。<strong>必须勾选上方「巡检任务」并保存</strong>，定时才会执行（仅填 Cron 不会自动推送）。</div>
-            </div>
-          </div>
-          <div class="footer-actions" style="margin-top: 10px;">
-            <button class="btn btn-ghost" id="nas-patrol-run-btn" type="button">立即巡检一次</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="footer-actions save-bar">
-        <span class="save-dirty-hint" id="save-dirty-hint">有未保存的更改</span>
-        <button class="btn btn-primary" id="save-btn" type="button">保存配置</button>
-      </div>
-      <div id="warning-panel" class="warning-panel"></div>
-
-      <div class="section test-section">
-        <div class="section-title">
-          <span>测试推送 <small>点击即发送内置测试消息，验证渠道配置是否正确；发送失败时可先保存配置再重试。</small></span>
-        </div>
-        <div class="footer-actions" style="margin-top: 10px;">
-          <button class="btn btn-ghost" id="test-btn" type="button" disabled>发送测试消息</button>
-        </div>
-        <div class="status-bar" id="status-bar"></div>
-      </div>
-
-      <div class="home-footer">
+      <div class="side-foot">
         <a class="footer-link" href="{{ repo_url }}" target="_blank" rel="noopener noreferrer">
-          <img class="footer-github-icon" src="{{ github_icon_url }}" alt="" width="18" height="18" decoding="async" />
+          <img class="footer-github-icon" src="{{ github_icon_url }}" alt="" width="16" height="16" decoding="async" />
           开源地址
         </a>
         <span class="footer-sep" aria-hidden="true">·</span>
         <a class="footer-link" href="faq">常见问题</a>
       </div>
-      <p class="license-footer">{{ footer_text }}</p>
+    </aside>
+
+    <div class="main">
+      <div class="topbar">
+        <h1 class="topbar-title" id="tab-title">概览</h1>
+        <span class="grow"></span>
+        <!-- save-bar 这个类名是 core.js 的契约：未保存更改时给它加 is-dirty -->
+        <div class="footer-actions save-bar">
+          <span class="save-dirty-hint" id="save-dirty-hint">有未保存的更改</span>
+          <button type="button" class="theme-btn" id="theme-toggle-btn" title="切换到深色模式" aria-label="切换到深色模式">深色</button>
+          <button class="btn btn-primary" id="save-btn" type="button">保存配置</button>
+        </div>
+      </div>
+
+      <div class="main-body">
+        <div id="warning-panel" class="warning-panel"></div>
+
+        <!-- 概览 -->
+        <section class="tab" id="tab-overview" data-tab-panel="overview" aria-labelledby="tab-title">
+          <div class="section stats-section">
+            <div class="channels-header">
+              <div class="section-title"><span>推送数据汇总</span></div>
+              <a class="btn btn-ghost" href="history">查看推送记录</a>
+            </div>
+            <div class="stats-grid">
+              <div class="stats-block">
+                <div class="stats-label">总推送</div>
+                <div class="stats-row">
+                  <span class="stats-total">共 <strong id="stat-total-total">0</strong> 条</span>
+                  <span class="stats-ok">成功 <strong id="stat-total-success">0</strong></span>
+                  <span class="stats-fail">失败 <strong id="stat-total-fail">0</strong></span>
+                </div>
+              </div>
+              <div class="stats-block">
+                <div class="stats-label">当日推送</div>
+                <div class="stats-row">
+                  <span class="stats-total">共 <strong id="stat-today-total">0</strong> 条</span>
+                  <span class="stats-ok">成功 <strong id="stat-today-success">0</strong></span>
+                  <span class="stats-fail">失败 <strong id="stat-today-fail">0</strong></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- test-section 这个类名是 core.js 的契约：
+               未保存更改跟踪会排除该区域内的交互，故不可改名。 -->
+          <div class="section test-section">
+            <div class="section-title">
+              <span>测试推送 <small>点击即发送内置测试消息，验证渠道配置是否正确；发送失败时可先保存配置再重试。</small></span>
+            </div>
+            <div class="footer-actions">
+              <button class="btn btn-ghost" id="test-btn" type="button" disabled>发送测试消息</button>
+            </div>
+            <div class="status-bar" id="status-bar"></div>
+          </div>
+
+          <p class="license-footer">{{ footer_text }}</p>
+        </section>
+
+        <!-- 推送渠道 -->
+        <section class="tab" id="tab-channels" data-tab-panel="channels" hidden>
+          <div class="section">
+            <div class="channels-header">
+              <div class="section-title">
+                <span>推送渠道 <small>支持为同一渠道配置多个 Webhook；关闭开关后保留配置但不推送</small></span>
+              </div>
+              <button class="add-btn" type="button" id="add-channel-btn"><span>＋</span> 添加渠道</button>
+            </div>
+            <div class="table-wrap">
+              <table class="channels-table">
+                <thead>
+                <tr>
+                  <th class="col-channel-type">渠道类型</th>
+                  <th>推送地址</th>
+                  <th class="channel-ops-th col-channel-ops">操作</th>
+                </tr>
+                </thead>
+                <tbody id="channels-body"></tbody>
+              </table>
+              <input type="hidden" id="input-bark-icon" value="" />
+            </div>
+            <div class="field-helper">
+              渠道配置教程：
+              <a href="{{ docs_url }}" target="_blank" rel="noopener noreferrer">推送渠道配置教程</a>
+            </div>
+          </div>
+        </section>
+
+        <!-- 监控事件 -->
+        <section class="tab" id="tab-events" data-tab-panel="events" hidden>
+          <div class="section">
+            <div class="section-title">
+              <span>事件选择 <small>请选择需要监控并推送的事件；点击分组标题可折叠/展开</small></span>
+            </div>
+            <div class="event-anchor-bar" id="events-anchor-bar"></div>
+            <div class="events-by-category" id="events-container"></div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">
+              <span>三方应用事件 <small>非NAS系统相关的三方类型相关事件</small></span>
+            </div>
+            <div class="events-by-category" id="third-party-events-container"></div>
+          </div>
+        </section>
+
+        <!-- 通知策略 -->
+        <section class="tab" id="tab-policy" data-tab-panel="policy" hidden>
+          <div class="section">
+            <div class="section-title">
+              <span>系统设置 <small>影响日志缓存与轮询行为</small></span>
+            </div>
+            <div class="system-grid">
+              <div>
+                <div class="field-label">日志缓存天数 (day)</div>
+                <input id="input-log-days" type="number" min="1" />
+                <div class="field-helper">原始推送日志的保留时长。</div>
+              </div>
+              <div>
+                <div class="field-label">数据库轮询时间 (s)</div>
+                <input id="input-poll-interval" type="number" min="1" />
+                <div class="field-helper">轮询日志数据库的间隔时间，过小会增加磁盘 IO。</div>
+              </div>
+              <div>
+                <div class="field-label field-label-inline">
+                  <input type="checkbox" id="input-resume-from-cursor" />
+                  <span>重启后补推停机期间日志</span>
+                </div>
+                <div class="field-helper">默认关闭：启动时对齐当前库水位，只推送启动之后的新记录。开启后沿用上次保存的游标，把停机期间写入的日志补推一遍（短期重启不想漏事件时使用）。</div>
+              </div>
+              <div>
+                <div class="field-label">事件标题前缀</div>
+                <input id="input-title-prefix" type="text" placeholder="飞牛NAS" />
+                <div class="field-helper">默认「飞牛NAS」，内容为空则无前缀。</div>
+              </div>
+              <div>
+                <div class="field-label field-label-inline">
+                  <input type="checkbox" id="input-poll-batch-summary" />
+                  <span>轮询汇总模式</span>
+                </div>
+                <div class="field-helper">开启后短时间内的多条事件合并为一条推送。若关闭，短时间内频繁推送可能触发渠道限流。</div>
+              </div>
+              <div>
+                <div class="field-label field-label-inline">
+                  <input type="checkbox" id="input-minimal-push-enabled" />
+                  <span>极简推送</span>
+                </div>
+                <div class="field-helper">开启后推送消息将压缩为一行显示，仅展示关键信息</div>
+              </div>
+              <div>
+                <div class="field-label field-label-inline">
+                  <input type="checkbox" id="input-push-markdown-enabled" />
+                  <span>结构化消息</span>
+                </div>
+                <div class="field-helper">企业微信与钉钉使用 markdown、飞书使用富文本，按行分条展示；Bark、PushPlus、SMTP、通用 Webhook 等不支持富文本的渠道仍发纯文本。渠道不支持时会自动回退纯文本，不影响送达。</div>
+              </div>
+              <div>
+                <div class="field-label field-label-inline">
+                  <input type="checkbox" id="input-media-batch-enabled" />
+                  <span>影视/相册事件聚合推送</span>
+                </div>
+                <div class="field-helper">开启后，影视入库、相册分享等高频同类事件在静默窗口内合并为一条结构化消息，批量刮削入库不再刷屏。</div>
+                <div class="system-grid system-grid-narrow">
+                  <div>
+                    <div class="field-label">聚合静默窗口（秒）</div>
+                    <input id="input-media-batch-window" type="number" min="0" max="3600" step="10" />
+                    <div class="field-helper">窗口内无新事件才发送；0 表示按轮询轮次立即发送。</div>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div class="field-label field-label-inline">
+                  <input type="checkbox" id="input-ssh-ignore-loopback" />
+                  <span>忽略本机 SSH 登录/断开</span>
+                </div>
+                <div class="field-helper">来源为 127.0.0.1 / ::1 的 SSH 登录成功与断开不推送（如 fnOS Web 终端、本机工具定时 SSH 自查），失败与无效用户告警仍会推送。<strong>通过 frp 等内网穿透访问 SSH 时来源同为本机，请勿开启。</strong></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section dnd-section">
+            <div class="section-title"><span>勿扰模式</span></div>
+            <div class="field-label field-label-inline">
+              <input type="checkbox" id="input-dnd-enabled" />
+              <span>开启勿扰</span>
+            </div>
+            <div class="field-helper">开启后，在设定时段内不推送消息；结束后将本时段事件汇总为一条推送。</div>
+            <div class="system-grid system-grid-narrow">
+              <div>
+                <div class="field-label">开始时间</div>
+                <input id="input-dnd-start" type="time" value="22:00" />
+                <div class="field-helper">如 22:00，该时刻起进入勿扰</div>
+              </div>
+              <div>
+                <div class="field-label">结束时间</div>
+                <input id="input-dnd-end" type="time" value="07:00" />
+                <div class="field-helper">如 07:00，跨日则到次日该时刻结束</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 定时巡检 -->
+        <section class="tab" id="tab-patrol" data-tab-panel="patrol" hidden>
+          <div class="section nas-patrol-section">
+            <div class="section-title"><span>巡检任务</span></div>
+            <div class="field-label field-label-inline">
+              <input type="checkbox" id="input-nas-patrol-enabled" />
+              <span>开启巡检</span>
+            </div>
+            <div class="field-helper">按 Cron 采集本机 CPU、内存与磁盘并推送；标题为「事件标题前缀-巡检任务完成」。首次开启会锚定当前时间，<strong>不会立刻推送</strong>，需等到下一次 Cron（例如 <code>*/10 * * * *</code> 最多等约 10 分钟）。可点下方按钮立即验证。</div>
+            <div class="system-grid system-grid-single">
+              <div>
+                <div class="field-label">巡检 Cron 表达式</div>
+                <input id="input-nas-patrol-cron" type="text" placeholder="0 12 * * *" value="0 12 * * *" autocomplete="off" />
+                <div class="field-helper">标准 5 段 Cron。示例：每天中午 <code>0 12 * * *</code>；每 10 分钟 <code>*/10 * * * *</code>。<strong>必须勾选上方「开启巡检」并保存</strong>，定时才会执行（仅填 Cron 不会自动推送）。</div>
+              </div>
+            </div>
+            <div class="footer-actions">
+              <button class="btn btn-ghost" id="nas-patrol-run-btn" type="button">立即巡检一次</button>
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
   </div>
-  <div id="toast-container" class="toast-container"></div>
+{% endblock %}
 
-  <!-- 脚本已拆到 assets/js/：按主题分文件，加载顺序即依赖顺序（共享顶层作用域，不得重名）-->
-  <script src="assets/js/theme.js"></script>
+{% block scripts %}
   <script src="assets/js/core.js"></script>
   <script src="assets/js/auth.js"></script>
+  <script src="assets/js/tabs.js"></script>
   <script src="assets/js/channels.js"></script>
   <script src="assets/js/events.js"></script>
   <script src="assets/js/app.js"></script>
-</body>
-</html>
+{% endblock %}
