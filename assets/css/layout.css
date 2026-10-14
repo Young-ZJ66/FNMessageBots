@@ -149,20 +149,24 @@
    提取出来的按钮样式是全圆角(pill) + 大范围青色外发光（box-shadow: 0 12px 22px）。
    那在旧的居中卡片里尚可，放到顶栏与密集布局中就像一块光斑，也偏「消费级」。
    Calm Cyan 要的是干净体面，故改为小圆角 + 无发光：
-   只在「有未保存更改」时给一圈明确的环形提示，那时它才是有意义的信号。 */
-.btn { border-radius: var(--r-sm); }
-.btn-primary {
+   只在「有未保存更改」时给一圈明确的环形提示，那时它才是有意义的信号。
+
+   用 [data-page] 前缀（任意页面）是为了与 app.css 里 [data-page="…"] .btn 同级，
+   靠本文件后加载取胜；只写 .btn 会因优先级更低而被压过。 */
+[data-page] .btn { border-radius: var(--r-sm); }
+[data-page] .btn-primary {
   background: var(--accent);
   box-shadow: none;
   transition: background-color var(--tr), box-shadow var(--tr);
 }
-.btn-primary:hover {
+[data-page] .btn-primary:hover {
   background: var(--accent-hover);
   box-shadow: none;
   transform: none;
 }
-.btn-danger, .add-btn { border-radius: var(--r-sm); }
-.add-btn { padding: 6px 12px; }
+[data-page] .btn-danger,
+[data-page] .add-btn { border-radius: var(--r-sm); }
+[data-page] .add-btn { padding: 6px 12px; }
 
 /* 区块内的操作按钮左对齐：右对齐会让它跑到卡片另一侧，与上方说明脱节 */
 [data-page="index"] .section .footer-actions { justify-content: flex-start; }
@@ -176,6 +180,19 @@
   padding: 8px 12px;
   cursor: pointer;
   transition: background-color var(--tr), color var(--tr), border-color var(--tr);
+  /* 必须显式重置这几个：app.css 的 index 段里还留着旧「圆形主题切换器」的
+     min-width/height/border-radius（30px 圆钮）。它属于已删除的 .theme-switcher，
+     但仍会命中新的文字按钮，把「深色」挤成两行的小圆圈。
+     用 [data-page] 前缀同 app.css 同级，靠本文件后加载取胜。 */
+  min-width: 0;
+  height: auto;
+  white-space: nowrap;
+}
+[data-page] .theme-btn {
+  min-width: 0;
+  height: auto;
+  border-radius: var(--r-sm);
+  white-space: nowrap;
 }
 .theme-btn:hover { background: var(--surface-2); color: var(--text); }
 
@@ -225,6 +242,100 @@
    之后 auto-fill 会自动填成 4 列，卡片变窄使说明文字截断得比原来厉害。
    提到 300px 恢复 3 列，说明文字才有余地。 */
 [data-page="index"] .events-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+
+/* ── 常见问题页：窄屏下内容被裁 ──
+   实测（design-previews/_render.py --overflow）：430px 时 article.faq-item 宽 384px、
+   右边界 433px，而视口 clientWidth 只有 415px——被祖先的 overflow:hidden 裁掉。
+
+   根因有两条，缺一不可：
+   1) .faq-list 只写了 display:grid 而没给列定义，隐式列的宽度下限是 min-content，
+      条目里只要有长且不可断的字符串（URL、文件路径、code），整列就会被撑宽；
+   2) .faq-item p 用了 white-space: pre-line，长 token 不会断行，min-content 因此很大。
+   所以：列改为可收缩的 minmax(0, 1fr)，并允许在任意位置断行。 */
+.faq-list { grid-template-columns: minmax(0, 1fr); }
+[data-page="faq"] .faq-item h2,
+[data-page="faq"] .faq-item p,
+[data-page="faq"] .faq-item li { overflow-wrap: anywhere; }
+
+/* ── 窄屏：推送渠道表格改为「一渠道一张卡」 ──
+   问题：表格形态在窄屏下必须有横向滚动才能点到最右侧的开关与删除按钮
+   （.table-wrap 的 overflow-x 只是避免撑破页面，并没有解决「够不着」）；
+   而 SMTP 那组字段是 JS 设的 3 列栅格（minmax(160px,1fr)），430px 下必然溢出。
+   做法：把每行改为栅格 —— 类型与操作同一行，地址占满下一行。
+   用类名钩子（channel-type-td / channel-url-td）而不是 nth-child：
+   列顺序若有变动，nth-child 会静默错位，类名则会直接失效报错。
+
+   断点取 768px 与 app.css 里那条原始规则（@media max-width:768px 下
+   .channels-table { min-width: 760px }）对齐：凡是原本会触发横向滚动的宽度，
+   现在一律改用卡片，避免出现「701~768px 之间仍是表格」的夹缝。 */
+@media (max-width: 768px) {
+  [data-page="index"] .channels-table thead { display: none; }
+  [data-page="index"] .channels-table,
+  [data-page="index"] .channels-table tbody { display: block; width: 100%; min-width: 0; }
+
+  [data-page="index"] .channels-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--sp-2) var(--sp-3);
+    align-items: center;
+    padding: var(--sp-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+  }
+  [data-page="index"] .channels-table tbody tr + tr { margin-top: var(--sp-3); }
+
+  /* 选择器与 app.css 里 [data-page="index"] .channels-table tbody tr:not(:last-child) td
+     同级，靠 layout.css 后加载取胜；不用 !important。 */
+  [data-page="index"] .channels-table tbody tr:not(:last-child) td { border-bottom: 0; }
+  [data-page="index"] .channels-table tbody tr > td { display: block; padding: 0; border: 0; }
+  /* 显式指定行列，不依赖自动放置：栅格默认是「稀疏」装箱，按 DOM 顺序
+     类型→行1、地址（跨整行）→行2、操作→从行2继续往后找→落到行3，
+     结果开关与删除被推到卡片底部。明确写出行号才稳定。 */
+  [data-page="index"] .channel-type-td { grid-column: 1; grid-row: 1; min-width: 0; }
+  [data-page="index"] .channel-ops-td { grid-column: 2; grid-row: 1; text-align: right; }
+  [data-page="index"] .channel-url-td { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+
+  [data-page="index"] .channels-table select,
+  [data-page="index"] .channels-table input,
+  [data-page="index"] .channels-table textarea {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* SMTP 的三列栅格由 JS 以内联样式设定，只有 !important 能覆盖内联声明。
+     其余字段容器本就是纵向 flex，无需处理。 */
+  [data-page="index"] .channel-url-td .smtp-fields {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* 用 ID 选择器（优先级 1,0,0）针对这两个确定的元素，而不是靠类名去拼优先级：
+   - app.css 里是 [data-page="index"] .theme-btn，其中 min-width:30px/height:30px/
+     border-radius:999px 属于已删除的旧「圆形主题切换器」，仍会命中新的文字按钮；
+   - app.css 里是 [data-page="index"] .save-bar.is-dirty .save-dirty-hint（4 个类级），
+     普通类选择器压不过它。
+   另外 .save-bar 是 flex 容器，主题按钮作为 flex 项会在空间不足时被压缩，
+   文字随即换行成竖排——所以必须 flex: none + nowrap。 */
+#theme-toggle-btn {
+  flex: none;
+  min-width: 0;
+  height: auto;
+  white-space: nowrap;
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+}
+
+/* ── 窄屏：顶栏必须保证保存按钮可点 ──
+   手机上一改字段就会出现「有未保存更改」提示（约 100px 宽），顶栏随即装不下。
+   窄屏下隐藏提示文字，未保存状态改由保存按钮的环形高亮表达，信息不丢。 */
+@media (max-width: 768px) {
+  #save-dirty-hint { display: none; }
+  #theme-toggle-btn { padding: 8px 10px; }
+  .topbar { gap: var(--sp-2); }
+  .topbar-title { font-size: var(--fs-lg); }
+  [data-page] .save-bar { flex: none; }
+}
 
 /* ── 窄屏：侧栏折叠为顶部横向导航条 ──
    不折叠的话 236px 侧栏会把内容整段挤出视口（实测会出现整页横向偏移）。 */

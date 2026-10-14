@@ -211,6 +211,9 @@ function createChannelRow(chType, url, enabled) {
   const initiallyEnabled = enabled !== false;
 
   const tdType = document.createElement("td");
+  // 类名钩子供窄屏布局使用：窄屏下每行改为「卡片」（类型 + 操作一行，地址占满下一行）。
+  // 不靠 nth-child 定位，否则列顺序一变样式就会静默错位。
+  tdType.className = "channel-type-td";
   const sel = document.createElement("select");
   for (const opt of channelOptions) {
     const o = document.createElement("option");
@@ -222,6 +225,7 @@ function createChannelRow(chType, url, enabled) {
   tdType.appendChild(sel);
 
   const tdUrl = document.createElement("td");
+  tdUrl.className = "channel-url-td";
   let rowChannelType = chType;
 
   function readCurrentSerializedUrl() {
