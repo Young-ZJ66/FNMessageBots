@@ -605,12 +605,29 @@ class UnifiedNotifier:
         except Exception:
             pass
 
+    # 合并明细入库时只保留小字段并限量：raw_log / full_event_data 是整条原始事件，
+    # 逐条存进推送记录会让库迅速膨胀，而推送消息里本来就带着完整内容。
+    _MERGED_ITEM_KEYS = ("disk", "device", "name", "model", "serial", "timestamp")
+    _MERGED_ITEMS_LIMIT = 50
+
+    @classmethod
+    def _compact_merged_items(cls, items: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for it in (items or [])[:cls._MERGED_ITEMS_LIMIT]:
+            if not isinstance(it, dict):
+                continue
+            row = {k: it[k] for k in cls._MERGED_ITEM_KEYS if it.get(k) not in (None, "")}
+            if row:
+                out.append(row)
+        return out
+
     def _record_merged_event_send(
         self,
         event_type: str,
         count: int,
         success: bool,
         channel_results: Optional[List[Dict[str, Any]]] = None,
+        items: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         """合并事件（磁盘唤醒/休眠）真正发出后的补记。
 
@@ -633,6 +650,10 @@ class UnifiedNotifier:
                 "kind": "merged_disk_event",
                 "event_type": event_type,
                 "merged_count": int(count or 0),
+                # 逐条明细：合并推送把多块盘的唤醒/休眠并成一条消息发出，
+                # 只记条数的话事后无法知道是哪几块盘。明细本来只在推送消息里，
+                # 入库后推送记录才能展开回看。
+                "merged_items": self._compact_merged_items(items),
                 "channel_results": _truncate_channel_results_for_storage(channel_results_list),
             }
             if not success:

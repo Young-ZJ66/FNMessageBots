@@ -114,7 +114,7 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
                  pool_size: int = 10,
                  retries: int = 3,
                  timeout: int = 10,
-                 merged_event_recorder: Optional[Callable[[str, int, bool, List[Dict[str, Any]]], None]] = None,
+                 merged_event_recorder: Optional[Callable[[str, int, bool, List[Dict[str, Any]], List[Dict[str, Any]]], None]] = None,
                  ):
         """
         初始化通知器
@@ -133,8 +133,11 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
             retries: 重试次数
             timeout: 超时时间
             merged_event_recorder: 合并事件（磁盘唤醒/休眠）真正发出后的回调，
-                (event_type, count, success, channel_results)；用于把合并推送补记入
-                推送统计与推送记录（合并发送发生在定时线程，不在 send_notification 调用栈内）
+                (event_type, count, success, channel_results, items)；用于把合并推送补记入
+                推送统计与推送记录（合并发送发生在定时线程，不在 send_notification 调用栈内）。
+                items 是本次合并的逐条明细（磁盘设备/型号/序列号），推送记录里要靠它
+                才能展开看到「到底哪几块盘醒了」——只记条数的话，明细就只剩推送消息里
+                那一份，事后无法回看。
         """
         # 日志对象先于合并定时线程建立，避免线程异常分支访问未赋值的 self.logger
         self.logger = logging.getLogger(__name__)
@@ -339,11 +342,11 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
         if results and any(results):
             self._record_send_result(True)
             self.logger.info(f"合并事件发送成功: {event_type}, 数量: {len(event_list)}")
-            self._notify_merged_event_sent(event_type, len(event_list), True, channel_results)
+            self._notify_merged_event_sent(event_type, len(event_list), True, channel_results, event_list)
             return True, channel_results
         self._record_send_result(False)
         self.logger.warning(f"合并事件发送失败: {event_type}, 数量: {len(event_list)}")
-        self._notify_merged_event_sent(event_type, len(event_list), False, channel_results)
+        self._notify_merged_event_sent(event_type, len(event_list), False, channel_results, event_list)
         return False, channel_results
 
     def _needs_bark_message(self) -> bool:
@@ -383,13 +386,14 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
         count: int,
         success: bool,
         channel_results: List[Dict[str, Any]],
+        items: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         """通知外层把「合并事件已真正发出」补记入统计与推送记录（回调可选，失败不影响推送）。"""
         cb = getattr(self, "merged_event_recorder", None)
         if cb is None:
             return
         try:
-            cb(event_type, count, success, channel_results)
+            cb(event_type, count, success, channel_results, items)
         except Exception as e:
             self.logger.warning("合并事件记录回调失败: %s", e)
     

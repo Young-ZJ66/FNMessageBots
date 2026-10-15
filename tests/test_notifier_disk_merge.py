@@ -96,28 +96,29 @@ class TestMergedSendRecorder(DiskMergeCase):
     def test_recorder_called_only_after_real_send(self):
         calls = []
 
-        def recorder(event_type, count, success, channel_results):
-            calls.append((event_type, count, success, channel_results))
+        # items 是后加的逐条明细参数：推送记录要靠它才能展开看到是哪几块盘
+        def recorder(event_type, count, success, channel_results, items=None):
+            calls.append((event_type, count, success, channel_results, items))
 
         notifier = self._make_notifier(recorder=recorder, wechat_webhook_url="http://example.test/hook")
-        ok, crs = notifier._send_merged_disk_event(
-            "DiskWakeup", [self.disk_event("sda"), self.disk_event("sdb")], 0
-        )
+        disks = [self.disk_event("sda"), self.disk_event("sdb")]
+        ok, crs = notifier._send_merged_disk_event("DiskWakeup", disks, 0)
         notifier.close()
 
         self.assertTrue(ok)
         self.assertEqual(len(calls), 1, "真正发出合并通知后必须回调一次")
-        event_type, count, success, channel_results = calls[0]
+        event_type, count, success, channel_results, items = calls[0]
         self.assertEqual(event_type, "DiskWakeup")
         self.assertEqual(count, 2)
         self.assertTrue(success)
         self.assertTrue(channel_results)
+        self.assertEqual(items, disks, "逐条明细必须原样传给记录方，否则无从回看")
 
     def test_recorder_reports_failure(self):
         calls = []
 
-        def recorder(event_type, count, success, channel_results):
-            calls.append((event_type, count, success, channel_results))
+        def recorder(event_type, count, success, channel_results, items=None):
+            calls.append((event_type, count, success, channel_results, items))
 
         stub_deps.set_fake_handler(lambda m, u, k: stub_deps.StubResponse(500, text="boom"))
         notifier = self._make_notifier(recorder=recorder, wechat_webhook_url="http://example.test/hook")
@@ -226,6 +227,38 @@ class TestUnifiedNotifierRecording(unittest.TestCase):
         record = self.push_history.get_records(limit=1)[0]
         self.assertEqual(record["event_type"], "DiskWakeup")
         self.assertIn("3", record["summary"])
+        notifier.close()
+
+    def test_merged_items_are_stored_for_detail_view(self):
+        """合并推送的逐条明细要入库，否则推送记录里只剩一个条数、无法回看是哪几块盘。
+
+        入库前会裁掉大字段（raw_log / full_event_data 是整条原始事件，逐条存会让库膨胀）
+        并限量，条数另有 merged_count 记录。"""
+        from notifier.unified_notifier import UnifiedNotifier
+
+        notifier = UnifiedNotifier(self._config())
+        self.push_history.clear_all()
+        notifier._record_merged_event_send(
+            "DiskWakeup", 2, True, [{"channel": "企业微信", "success": True}],
+            [
+                {"disk": "/dev/sda", "model": "WD40", "serial": "SN1",
+                 "timestamp": "2026-10-16 00:00:00", "raw_log": "x" * 500,
+                 "full_event_data": {"big": "y" * 500}},
+                {"disk": "/dev/sdb", "model": "WD40", "serial": "SN2"},
+            ],
+        )
+        import json as _json
+
+        rec = self.push_history.get_records(limit=1)[0]
+        # 库里存的是 JSON 文本
+        detail = _json.loads(rec["detail"])
+        self.assertEqual(detail["merged_count"], 2)
+        items = detail["merged_items"]
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["disk"], "/dev/sda")
+        self.assertEqual(items[0]["serial"], "SN1")
+        self.assertNotIn("raw_log", items[0], "整条原始事件不入库")
+        self.assertNotIn("full_event_data", items[0], "整条原始事件不入库")
         notifier.close()
 
     def test_merged_send_failure_is_recorded_as_failure(self):
