@@ -375,7 +375,8 @@ function createChannelRow(chType, url, enabled) {
   ops.className = "channel-ops";
 
   const enableLabel = document.createElement("label");
-  enableLabel.className = "channel-switch";
+  // 开关组件统一为 .switch / .switch-slider（定义在 layout.css），全站同一套外观
+  enableLabel.className = "switch";
   enableLabel.title = "关闭后保留配置但不推送该渠道";
   const enableInp = document.createElement("input");
   enableInp.type = "checkbox";
@@ -383,7 +384,7 @@ function createChannelRow(chType, url, enabled) {
   enableInp.checked = initiallyEnabled;
   enableInp.setAttribute("aria-label", "启用该渠道");
   const slider = document.createElement("span");
-  slider.className = "channel-switch-slider";
+  slider.className = "switch-slider";
   enableLabel.appendChild(enableInp);
   enableLabel.appendChild(slider);
   function syncRowEnabledStyle() {

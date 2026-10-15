@@ -914,8 +914,17 @@ def create_app(on_config_saved=None) -> Flask:
 
     @app.get("/history")
     def history_page():
-        """推送记录二级页：列表 + 筛选 + 加载更多 + 查看详情。"""
-        return render_template("history.html", favicon_url=favicon_url, footer_text=FOOTER_TEXT)
+        """推送记录已并入首页「概览」的卡片列表，不再单独成页。
+
+        保留此路由并 302 到概览，而不是直接删除：旧书签、外部链接与
+        浏览器历史里的 /history 仍能落到正确位置，不会变成 404。
+        跳转目标用 _home_url() 拼，直接写 "/" 会在网关前缀部署下跳错。
+        原有查询参数原样保留——丢掉的话 ?theme=dark 之类的状态就没了。
+        """
+        qs = request.query_string.decode("utf-8", "replace")
+        if "tab=" not in qs:
+            qs = (qs + "&" if qs else "") + "tab=overview"
+        return redirect(_home_url() + "?" + qs)
 
     @app.get("/faq")
     def faq_page():

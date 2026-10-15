@@ -52,8 +52,10 @@ PAGES = [
     ("/?tab=events", "index-events"),
     ("/?tab=policy", "index-policy"),
     ("/?tab=patrol", "index-patrol"),
-    ("/history", "history"),
     ("/faq", "faq"),
+    # /history 现在是 302 跳转到概览：Chrome 会跟随，截图即概览页，
+    # 留一项是为了确认跳转确实落到了正确的位置
+    ("/history", "history-redirect"),
 ]
 
 # 文档级横向溢出探针。放在应用的 /assets/ 下加载，于是与目标页同源，
@@ -380,7 +382,7 @@ def main() -> int:
         probe.write_text(OVERFLOW_PROBE_HTML, encoding="utf-8")
         widths = [w.strip() for w in args.widths.split(",") if w.strip()]
         paths = [p for p in ("/", "/?tab=channels", "/?tab=events", "/?tab=policy",
-                             "/?tab=patrol", "/history", "/faq")]
+                             "/?tab=patrol", "/faq")]
         import json as _json
         url = (f"http://127.0.0.1:{port}/assets/_overflow_probe.html"
                f"?paths={','.join(paths)}&widths={','.join(widths)}")

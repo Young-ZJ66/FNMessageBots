@@ -26,10 +26,12 @@ if (appMainEl) {
 let channelOptions = [];
 const fetchOpts = { credentials: "include" };
 
-// 未保存更改跟踪：任意表单交互即标记（测试推送区除外）；保存成功后清除
+// 未保存更改跟踪：任意表单交互即标记；保存成功后清除。
+// 早先这里会排除 .test-section（测试推送区），因为当时那一块只有测试按钮。
+// 现在测试按钮移到了推送渠道卡片头部，.test-section 已不存在，该排除随之删除；
+// 按钮本身不触发 change/input，本就不会误标。
 let configDirty = false;
 function markConfigDirty(e) {
-  if (e && e.target && e.target.closest && e.target.closest(".test-section")) return;
   if (configDirty) return;
   configDirty = true;
   const bar = document.querySelector(".save-bar");

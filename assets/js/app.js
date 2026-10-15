@@ -71,21 +71,17 @@ async function loadConfig() {
     };
 
     const nasEn = document.getElementById("input-nas-patrol-enabled");
-    const nasCron = document.getElementById("input-nas-patrol-cron");
     if (nasEn) nasEn.checked = !!data.nas_patrol_enabled;
-    if (nasCron) nasCron.value = (data.nas_patrol_cron || "0 12 * * *").trim() || "0 12 * * *";
-    function syncNasPatrolInputs() {
-      const enEl = document.getElementById("input-nas-patrol-enabled");
-      const cronEl = document.getElementById("input-nas-patrol-cron");
-      if (cronEl && enEl) cronEl.disabled = !enEl.checked;
-    }
-    if (nasEn) nasEn.onchange = syncNasPatrolInputs;
-    syncNasPatrolInputs();
+    // 周期选择器：把服务端的 Cron 还原成「频率 + 时间」等选项，
+    // 再由选项生成隐藏字段 #input-nas-patrol-cron 的值（保存时读它）。
+    initPatrolSchedule(data.nas_patrol_cron || "0 12 * * *");
 
     // 配置已从服务端加载成功即可测推送，不必再次点「保存配置」。
     testBtn.disabled = false;
     setStatus(false, "");
     loadPushStats();
+    // 推送记录列表：只有确认已鉴权（配置读到了）才拉取，避免未登录时的 401 重载循环
+    initRecordsOnce();
   } catch (e) {
     console.error(e);
     setStatus(false, "加载配置失败，请检查服务是否正常运行。");
@@ -118,7 +114,10 @@ saveBtn.addEventListener("click", async () => {
   const events = [];
   [eventsContainer, thirdPartyEventsContainer].forEach(el => {
     if (!el) return;
-    el.querySelectorAll("input[type=checkbox]").forEach(cb => {
+    // 只认 .event-input（事件项本身）。若按 input[type=checkbox] 收集，
+    // 各分类的「全选」开关也会被算进来，而它没有 value、浏览器默认给 "on"，
+    // 于是点过全选再保存就会多提交一个名为 "on" 的事件 id。
+    el.querySelectorAll("input.event-input").forEach(cb => {
       if (cb.checked) events.push(cb.value);
     });
   });

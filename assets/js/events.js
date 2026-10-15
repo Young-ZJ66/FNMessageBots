@@ -1,88 +1,107 @@
 /* FnMessageBot · events.js
    ----------------------------------------------------------------------------
-   监控事件：按分类渲染勾选卡片与全选/折叠
+   监控事件：每个分类一张卡片，卡片内一行一个事件项，开关控制启用
 
-   由 design-previews/_extract_js.py 从模板内联 <script> 提取。
-   提取时**未改动任何逻辑与标识符**，仅去掉原有的 4 空格整体缩进。
-   注意：这些文件之间共享顶层作用域（无 IIFE），因此**不得重名**；
-   脚本按模板中 <script src> 的顺序执行。
+   本次重写（原来是「一张大卡片 + 网格排布 + 勾选框」）：
+   - 每个分类独立成卡片，卡片之间自然堆叠，不再套一个大滚动区
+   - 一行一个事件项：左侧名称与说明，右侧开关
+   - 勾选框全部换成开关（底层仍是 input[type=checkbox]，故 .checked 读写不变）
+
+   同时修掉一个原有 bug：全选控件也是 input[type=checkbox] 且没有 value，
+   浏览器会把它的 value 默认为 "on"；而 app.js 保存时收集的是容器内**所有**
+   checkbox 的 value。于是点过全选再保存，"on" 就会被当成事件 id 提交上去。
+   现在事件项统一带 .event-input，收集与计数都只认它。
+
+   本文件与其它脚本共享顶层作用域（无 IIFE），不得重名。
    ========================================================================== */
+
+/* 与 index.html 里的 switch 宏保持同一套结构：label.switch + input + span.switch-slider */
+function buildEventSwitch(inputClass, ariaLabel, checked) {
+  const label = document.createElement("label");
+  label.className = "switch";
+  label.title = ariaLabel;
+  const inp = document.createElement("input");
+  inp.type = "checkbox";
+  inp.className = inputClass;
+  inp.checked = !!checked;
+  inp.setAttribute("aria-label", ariaLabel);
+  const slider = document.createElement("span");
+  slider.className = "switch-slider";
+  label.appendChild(inp);
+  label.appendChild(slider);
+  return { label: label, input: inp };
+}
 
 function renderEventCategories(container, categories, selected, anchorBar) {
   if (!container) return;
   container.innerHTML = "";
   if (anchorBar) anchorBar.innerHTML = "";
   const anchorChips = [];
+
   for (const cat of categories || []) {
-    const catBlock = document.createElement("div");
-    catBlock.className = "event-category";
+    const card = document.createElement("section");
+    card.className = "section event-category";
 
-    const catHeader = document.createElement("div");
-    catHeader.className = "event-category-title";
+    // ── 卡片头：标题可折叠 + 已选计数 + 全选开关 ──
+    const header = document.createElement("div");
+    header.className = "event-category-header";
 
-    // 标题 + 折叠箭头：点击折叠/展开该分组
-    const catCollapse = document.createElement("span");
-    catCollapse.className = "event-cat-collapse";
-    const catTitleSpan = document.createElement("span");
-    catTitleSpan.textContent = cat.name || "";
-    catCollapse.appendChild(catTitleSpan);
+    const titleBtn = document.createElement("button");
+    titleBtn.type = "button";
+    titleBtn.className = "event-category-toggle";
+    titleBtn.setAttribute("aria-expanded", "true");
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = cat.name || "";
+    titleBtn.appendChild(nameSpan);
     const chevron = document.createElement("span");
     chevron.className = "chevron";
     chevron.textContent = "▾";
-    catCollapse.appendChild(chevron);
-    const toggleCollapse = () => catBlock.classList.toggle("collapsed");
-    catCollapse.addEventListener("click", toggleCollapse);
-    catHeader.appendChild(catCollapse);
+    titleBtn.appendChild(chevron);
+    titleBtn.addEventListener("click", () => {
+      const collapsed = card.classList.toggle("collapsed");
+      titleBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    });
+    header.appendChild(titleBtn);
 
-    const catOps = document.createElement("span");
-    catOps.style.display = "inline-flex";
-    catOps.style.alignItems = "center";
-    // 已选计数：随勾选实时更新
-    const catCount = document.createElement("span");
-    catCount.className = "event-cat-count";
-    catOps.appendChild(catCount);
+    const ops = document.createElement("div");
+    ops.className = "event-category-ops";
+    const count = document.createElement("span");
+    count.className = "event-cat-count";
+    ops.appendChild(count);
 
-    const catToggleLabel = document.createElement("label");
-    catToggleLabel.style.fontSize = "13px";
-    catToggleLabel.style.cursor = "pointer";
-    catToggleLabel.style.flexShrink = "0";
-    const catToggle = document.createElement("input");
-    catToggle.type = "checkbox";
-    catToggle.style.marginRight = "4px";
-    catToggleLabel.appendChild(catToggle);
-    const catToggleText = document.createElement("span");
-    catToggleText.textContent = "全选";
-    catToggleLabel.appendChild(catToggleText);
-    catOps.appendChild(catToggleLabel);
-    catHeader.appendChild(catOps);
+    const all = buildEventSwitch("event-cat-all", "全选「" + (cat.name || "") + "」", false);
+    const allWrap = document.createElement("span");
+    allWrap.className = "event-cat-all-wrap";
+    const allText = document.createElement("span");
+    allText.textContent = "全选";
+    allWrap.appendChild(allText);
+    allWrap.appendChild(all.label);
+    ops.appendChild(allWrap);
+    header.appendChild(ops);
+    card.appendChild(header);
 
-    catBlock.appendChild(catHeader);
+    // ── 事件行：一行一个 ──
+    const rows = document.createElement("div");
+    rows.className = "event-rows";
 
-    const grid = document.createElement("div");
-    grid.className = "events-grid";
-
+    function inputs() {
+      return Array.from(rows.querySelectorAll("input.event-input"));
+    }
     function updateCatToggle() {
-      const boxes = grid.querySelectorAll("input[type=checkbox]");
-      const checkedCount = Array.from(boxes).filter(b => b.checked).length;
-      if (!boxes.length) {
-        catToggle.checked = false;
-      } else {
-        catToggle.checked = checkedCount === boxes.length;
-      }
-      catCount.textContent = `已选 ${checkedCount}/${boxes.length}`;
+      const boxes = inputs();
+      const checkedCount = boxes.filter(b => b.checked).length;
+      all.input.checked = boxes.length > 0 && checkedCount === boxes.length;
+      count.textContent = `已选 ${checkedCount}/${boxes.length}`;
     }
 
     for (const ev of cat.events || []) {
-      const div = document.createElement("div");
-      div.className = "event-item";
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.value = ev.id;
-      if (selected.has(ev.id)) cb.checked = true;
-      cb.addEventListener("change", () => updateCatToggle());
+      const row = document.createElement("div");
+      row.className = "event-row";
 
       const label = document.createElement("div");
+      label.className = "event-row-label";
       const title = document.createElement("span");
+      title.className = "event-name";
       title.textContent = ev.title || ev.id;
       label.appendChild(title);
       if (ev.note) {
@@ -91,35 +110,39 @@ function renderEventCategories(container, categories, selected, anchorBar) {
         helper.textContent = ev.note;
         label.appendChild(helper);
       }
-      div.appendChild(cb);
-      div.appendChild(label);
-      grid.appendChild(div);
+
+      // value 必须是事件 id：app.js 保存时按它收集
+      const sw = buildEventSwitch("event-input", ev.title || ev.id, selected.has(ev.id));
+      sw.input.value = ev.id;
+      sw.input.addEventListener("change", updateCatToggle);
+
+      row.appendChild(label);
+      row.appendChild(sw.label);
+      rows.appendChild(row);
     }
 
-    catToggle.addEventListener("change", () => {
-      const boxes = grid.querySelectorAll("input[type=checkbox]");
-      const target = catToggle.checked;
-      boxes.forEach(b => { b.checked = target; });
+    all.input.addEventListener("change", () => {
+      const target = all.input.checked;
+      inputs().forEach(b => { b.checked = target; });
+      updateCatToggle();
     });
 
     updateCatToggle();
-    catBlock.appendChild(grid);
-    container.appendChild(catBlock);
+    card.appendChild(rows);
+    container.appendChild(card);
 
-    // 锚点：点击滚动容器到该分组（折叠状态先展开）
+    // 锚点芯片：滚动到该分类卡片（折叠状态先展开，否则滚过去只看到标题）
     if (anchorBar) {
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className = "event-anchor-chip";
       chip.textContent = cat.name || "";
       chip.addEventListener("click", () => {
-        if (catBlock.classList.contains("collapsed")) {
-          catBlock.classList.remove("collapsed");
+        if (card.classList.contains("collapsed")) {
+          card.classList.remove("collapsed");
+          titleBtn.setAttribute("aria-expanded", "true");
         }
-        const top = catBlock.getBoundingClientRect().top
-          - container.getBoundingClientRect().top
-          + container.scrollTop - 4;
-        container.scrollTo({ top, behavior: "smooth" });
+        card.scrollIntoView({ behavior: "smooth", block: "start" });
       });
       anchorBar.appendChild(chip);
       anchorChips.push(chip);

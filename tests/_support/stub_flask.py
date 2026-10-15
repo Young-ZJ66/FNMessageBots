@@ -18,6 +18,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlencode
 
 # 每个元素：{"template": str, "context": dict}
 RENDER_LOG: List[Dict[str, Any]] = []
@@ -86,6 +87,16 @@ class Request:
 
     def get_json(self, silent: bool = False, force: bool = False) -> Any:
         return self._json
+
+    @property
+    def query_string(self) -> bytes:
+        """原始查询串（bytes），与 Flask 一致。
+
+        测试客户端会把 URL 里的查询解析进 args，这里按其重建即可：
+        本桩只用于断言路由与重定向行为，不追求与原始字节序列完全一致
+        （参数顺序可能变化），但语义等价。
+        """
+        return urlencode(self.args.to_dict()).encode("utf-8")
 
 
 class _RequestProxy:

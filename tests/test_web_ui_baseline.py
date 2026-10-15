@@ -111,10 +111,12 @@ out["non_json_post"] = hit("/api/save-config", method="POST", env=GW, has_json=F
 
 # 模板上下文
 stub_flask.reset_render_log()
-for p in ("/", "/history", "/faq"):
+for p in ("/", "/faq"):
     hit(p, env=GW)
 out["renders"] = [{"template": r["template"], "context": sorted(r["context"])}
                   for r in stub_flask.RENDER_LOG]
+# 推送记录已并入首页概览：/history 现在是 302 跳转，不再渲染模板
+out["history_redirect"] = hit("/history", env=GW)
 
 # 打码：从 /api/config 读回 channels，确认密钥不出现
 cfg = hit("/api/config", env=GW)
@@ -232,13 +234,23 @@ def _referenced_vars(html: str) -> Set[str]:
 
 
 def _declared_vars(html: str) -> Set[str]:
-    """模板内 {% set x %}、{% for x in ... %} 声明的局部名。"""
+    """模板内 {% set x %}、{% for x in ... %} 声明的局部名，以及宏名与宏参数。"""
     declared: Set[str] = set()
     for m in re.finditer(r"\{%-?\s*set\s+([A-Za-z_][A-Za-z0-9_]*)", html):
         declared.add(m.group(1))
     for m in re.finditer(r"\{%-?\s*for\s+(.*?)\s+in\b", html, re.S):
         for name in re.split(r",", m.group(1)):
             declared.add(name.strip())
+    # 宏（如 switch 开关组件）：宏名会出现在调用表达式里，宏参数是宏内部的形参，
+    # 都由调用方传入，属于模板内部名字，不是视图需要提供的变量。
+    for m in re.finditer(
+            r"\{%-?\s*macro\s+([A-Za-z_][A-Za-z0-9_]*)\s*\((.*?)\)\s*-?%\}", html, re.S):
+        declared.add(m.group(1))
+        for part in m.group(2).split(","):
+            part = part.strip()
+            if not part:
+                continue
+            declared.add(part.split("=")[0].strip())
     return declared
 
 
@@ -250,8 +262,11 @@ class TemplateStaticCase(unittest.TestCase):
 
     def test_templates_exist(self):
         names = set(self.templates())
-        for expected in ("index.html", "history.html", "faq.html"):
+        for expected in ("index.html", "base.html", "faq.html"):
             self.assertIn(expected, names, f"缺少模板 {expected}")
+        # 推送记录已并入首页概览，不应再有独立页面模板
+        self.assertNotIn("history.html", names,
+                         "推送记录已并入概览页，history.html 应已删除")
 
     def test_jinja_tags_balanced(self):
         for name, html in self.templates().items():
@@ -288,6 +303,15 @@ class TemplateStaticCase(unittest.TestCase):
         declared: Set[str] = set()
         for _name, html in self.templates().items():
             declared |= set(re.findall(r'\bid="([^"]+)"', html))
+            # 开关组件由宏生成 id（{{ switch("input-xxx", "…") }}），
+            # 静态扫 id="…" 看不到它，但渲染后确实存在，故按调用参数补进来。
+            declared |= set(re.findall(r'\{\{-?\s*switch\(\s*"([^"]+)"', html))
+
+        macro_calls = sum(len(re.findall(r'\{\{-?\s*switch\(', h))
+                          for h in self.templates().values())
+        # 实测 8 处；留余量，但明显偏少即说明提取失效
+        self.assertGreaterEqual(macro_calls, 6,
+                                f"只找到 {macro_calls} 处开关宏调用，提取范围可能失效")
 
         needed: Set[str] = set()
         for _name, html in self.templates().items():
@@ -660,7 +684,14 @@ class WebUiBaselineCase(unittest.TestCase):
 
     def test_expected_pages_render(self):
         rendered = {r["template"] for r in self.probe["renders"]}
-        self.assertEqual(rendered, {"index.html", "history.html", "faq.html"})
+        self.assertEqual(rendered, {"index.html", "faq.html"})
+
+    def test_history_page_redirects_to_overview(self):
+        """/history 保留为 302 跳转，旧书签不会变成 404，也不再渲染独立页面。"""
+        r = self.probe["history_redirect"]
+        self.assertEqual(r["status"], 302)
+        self.assertIn("tab=overview", r["location"])
+        self.assertNotIn("history.html", r["text"])
 
 
 if __name__ == "__main__":
