@@ -12,6 +12,11 @@
    特别是 fetchOpts：core.js 已用 const 声明，这里**绝不能再声明**，直接复用。
    ========================================================================== */
 
+/* 卡片上能显示多少字的返回内容。超过这个长度的记录才值得展开看全文；
+   短于它的记录，卡片上已经能看到全部信息，展开就是重复——不再提供展开。
+   160 字足够容纳常见的错误信息（如 HTTP 状态 + 接口返回的 JSON）。 */
+const RECORDS_CARD_TEXT_MAX = 160;
+
 let recordsOffset = 0;
 const recordsPageSize = 30;
 let recordsFilter = "";
@@ -57,19 +62,24 @@ function recordsShorten(text, maxLen) {
   return text.length > maxLen ? text.slice(0, Math.max(0, maxLen - 1)) + "…" : text;
 }
 
-/* 从记录的 detail 字段里取出渠道结果，解析失败时返回 null。 */
-function recordsChannelResults(record) {
+/* 解析记录的 detail（可能是 JSON 字符串），失败返回 null。 */
+function recordsParsedDetail(record) {
   if (!record || !record.detail) return null;
   try {
     const detail = typeof record.detail === "string" ? JSON.parse(record.detail) : record.detail;
-    if (!detail) return null;
-    if (Array.isArray(detail.channel_results) && detail.channel_results.length) {
-      return detail.channel_results;
-    }
-    return null;
+    return detail || null;
   } catch (e) {
     return null;
   }
+}
+
+/* 从记录的 detail 字段里取出渠道结果，没有则返回 null。 */
+function recordsChannelResults(record) {
+  const detail = recordsParsedDetail(record);
+  if (detail && Array.isArray(detail.channel_results) && detail.channel_results.length) {
+    return detail.channel_results;
+  }
+  return null;
 }
 
 /* 401 时不能 window.location.href = "./"：首页是公开路径，未登录时每次加载都会
@@ -208,6 +218,20 @@ function recordsToggleDetail(card) {
 }
 
 
+/* 卡片之外还有没有值得展开的内容：
+   · 批次明细（汇总推送会把每条事件列成表格，卡片上放不下，只能展开看）
+   · 返回内容比卡片能显示的上限更长（卡片上是截断版）
+   两者都没有的记录就不提供展开——卡片已经看全了，再展开只是把同样的字读两遍。 */
+function recordsCardHasMore(record) {
+  const detail = recordsParsedDetail(record);
+  if (!detail) return false;
+  if (Array.isArray(detail.batch_items) && detail.batch_items.length) return true;
+  const results = Array.isArray(detail.channel_results) ? detail.channel_results : [];
+  return results.some(function (c) {
+    return recordsChannelOutput(c).length > RECORDS_CARD_TEXT_MAX;
+  });
+}
+
 /* ── 卡片 ── */
 /* 一条记录一张卡：首行是时间 / 事件类型 / 推送结果，随后是摘要与各渠道，
    末尾预留一个隐藏的详情容器，展开时就地填进去。
@@ -216,14 +240,19 @@ function recordsToggleDetail(card) {
    「推送是否送达」的结果，与事件本身是好消息还是坏消息无关
    （例如「任务计划执行失败」这条事件推送成功，只写「成功」会读起来矛盾）。 */
 function recordsBuildCard(record) {
+  const expandable = recordsCardHasMore(record);
   const card = document.createElement("article");
-  card.className = "record-card" + (record.success ? "" : " record-card-fail");
-  card.tabIndex = 0;
-  card.setAttribute("role", "button");
-  card.setAttribute("aria-expanded", "false");
-  card.title = "点击展开详情";
+  card.className = "record-card"
+    + (record.success ? "" : " record-card-fail")
+    + (expandable ? " record-card-expandable" : "");
   if (record.id !== undefined && record.id !== null) {
     card.setAttribute("data-record-id", String(record.id));
+  }
+  if (expandable) {
+    card.tabIndex = 0;
+    card.setAttribute("role", "button");
+    card.setAttribute("aria-expanded", "false");
+    card.title = "点击展开详情";
   }
 
   const head = document.createElement("div");
@@ -261,22 +290,36 @@ function recordsBuildCard(record) {
       const out = recordsChannelOutput(c);
       chip.className = "record-channel " + (c.success ? "is-ok" : "is-fail");
       // 只写渠道名；有返回内容（成功时的接口原文、失败时的错误与返回）就附上。
+      // 失败的渠道由 .is-fail 上红字——错误信息直接摆在卡片上，不必展开才看得到。
       // 不写「成功/失败」：卡片右上角已有推送结果徽标，逐渠道再写一遍既重复，
-      // 又会与事件性质混淆；失败与否看这段返回内容最直接。
+      // 又会与事件性质混淆。
       chip.textContent = out
-        ? (c.channel || "未知渠道") + " · " + recordsShorten(out, 48)
+        ? (c.channel || "未知渠道") + " · " + recordsShorten(out, RECORDS_CARD_TEXT_MAX)
         : (c.channel || "未知渠道");
       if (out) chip.title = out;
       list.appendChild(chip);
     });
     card.appendChild(list);
+  } else {
+    // 没有逐渠道明细时（后端只在失败时写 failure_summary），
+    // 把失败原因直接红字显示在卡片上，同样不必展开。
+    const detail = recordsParsedDetail(record);
+    const fs = detail && detail.failure_summary;
+    if (fs) {
+      const err = document.createElement("div");
+      err.className = "record-error";
+      err.textContent = recordsShorten(recordsStringify(fs), RECORDS_CARD_TEXT_MAX);
+      err.title = recordsStringify(fs);
+      card.appendChild(err);
+    }
   }
 
-  // 详情容器：默认隐藏，展开时就地填充
-  const detail = document.createElement("div");
-  detail.className = "detail-wrap record-detail";
-  detail.hidden = true;
-  card.appendChild(detail);
+  if (!expandable) return card;   // 卡片上已看全，不挂交互与详情容器
+
+  const detailBox = document.createElement("div");
+  detailBox.className = "detail-wrap record-detail";
+  detailBox.hidden = true;
+  card.appendChild(detailBox);
 
   card.addEventListener("click", function () { recordsToggleDetail(card); });
   card.addEventListener("keydown", function (e) {

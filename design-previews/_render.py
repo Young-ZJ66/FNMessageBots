@@ -32,6 +32,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import quote as _quote
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SRC = _ROOT / "src"
@@ -96,15 +97,18 @@ SHOT_WRAPPER_HTML = """<!DOCTYPE html>
         if (st > 40) clearInterval(stimer);
       }, 150);
     }
-    if (q.get("expand") === "1") {
+    // expand 传选择器（默认第一张记录卡）：点它一下。
+    // 记录是异步拉取后渲染的，onload 时元素还不存在，直接点会静默无效，故轮询等待。
+    var expandSel = q.get("expand");
+    if (expandSel) {
       // 记录是异步拉取后渲染的，onload 时 .record-card 还不存在，
       // 直接点会静默无效。轮询等它出现再点。
       var tries = 0;
       var timer = setInterval(function () {
         tries++;
         try {
-          var card = f.contentDocument.querySelector(".record-card");
-          if (card) { card.click(); clearInterval(timer); return; }
+          var target = f.contentDocument.querySelector(expandSel);
+          if (target) { target.click(); clearInterval(timer); return; }
         } catch (e) {}
         if (tries > 40) clearInterval(timer);
       }, 150);
@@ -358,7 +362,9 @@ def main() -> int:
     ap.add_argument("--scroll", default="",
                     help="截图前滚动到该选择器（配合 --exact-width 用于长页面）")
     ap.add_argument("--expand-record", action="store_true",
-                    help="截图前点击第一张推送记录卡片，验证详情就地展开")
+                    help="截图前点击一张推送记录卡片，验证详情就地展开")
+    ap.add_argument("--expand-sel", default="",
+                    help="配合 --expand-record 指定要点击的选择器，默认 .record-card（第一张）")
     ap.add_argument("--dirty", action="store_true",
                     help="截图前触发一次输入事件，模拟「有未保存更改」状态")
     ap.add_argument("--verbose", action="store_true",
@@ -531,7 +537,8 @@ def main() -> int:
                 url = (f"http://127.0.0.1:{port}/assets/_shot.html"
                        f"?u={path}&w={w}&h={h}"
                        + ("&dirty=1" if args.dirty else "")
-                       + ("&expand=1" if args.expand_record else "")
+                       + ("&expand=" + (_quote(args.expand_sel) if args.expand_sel else ".record-card")
+                        if args.expand_record else "")
                        + (f"&scroll={args.scroll}" if args.scroll else ""))
                 win = f"--window-size={w},{h}"
             else:

@@ -448,11 +448,14 @@
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--surface);
-  cursor: pointer;
   transition: border-color var(--tr), background-color var(--tr);
 }
-.record-card:hover { border-color: var(--border-strong); background: var(--surface-2); }
-.record-card:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring-weak); }
+/* 只有「卡片之外还有内容」的记录才可点（批次明细、或返回内容超过卡片显示上限）。
+   其它记录展开只是把同一条信息读两遍，干脆不给展开，也不给可点的手型光标——
+   鼠标变手型却点不出东西，比不能点更让人困惑。 */
+.record-card-expandable { cursor: pointer; }
+.record-card-expandable:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.record-card-expandable:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring-weak); }
 /* 展开中的卡片加高亮边框，避免在同一列卡片里找不到是哪一条展开了 */
 .record-card.is-open { border-color: var(--accent); background: var(--surface-2); }
 /* 失败记录给左侧色条：一列卡片扫一眼就能分出哪些出了问题 */
@@ -481,6 +484,14 @@
   word-break: break-word;
 }
 .record-channels { margin-top: var(--sp-2); display: flex; flex-wrap: wrap; gap: 6px; }
+/* 没有逐渠道明细时的失败原因：直接红字摆在卡片上，不必展开 */
+.record-error {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--err);
+  word-break: break-word;
+}
 .record-channel {
   padding: 2px 9px;
   border-radius: var(--r-sm);
