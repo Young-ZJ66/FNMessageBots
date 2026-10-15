@@ -33,28 +33,31 @@ function recordsStringify(value) {
   try { return JSON.stringify(value); } catch (e) { return String(value); }
 }
 
-/* 单条渠道的结果说明（用于**失败的**渠道）：给出错误与返回内容原文。
-   成功时返回空串，失败但两者都没有时也返回空串——一律不编造文字，
-   只展示渠道真正返回的东西。
-   记录里的 success 指的是「推送是否送达」（至少一个渠道成功即算成功），
+/* 把失败渠道的信息拆成「错误原因」与「响应原文」两段。
+   两段都是渠道或框架给出的原文，这里只拆分、去空白，不加工、也不加标签：
+   error 一般是 HTTP 状态或本地校验结论（HTTP 400 Bad Request / 未配置 /
+   端口必须是整数 / 异常文本），response 是接口响应体（大括号 JSON 或一段文字）。
+   两段本身就自描述，写「错误:」「返回:」反而像调试输出。
+   两段都为空时返回 null——不编造文字。
+   注：记录里的 success 指「推送是否送达」（至少一个渠道成功即算成功），
    与事件本身是好消息还是坏消息无关，所以文案一律写「推送成功/推送失败」，
    不要只写「成功/失败」以免与事件性质混淆。 */
-function recordsChannelExtra(c) {
-  if (!c || c.success) return "";
-  const parts = [];
-  const err = recordsStringify(c.error);
-  const resp = recordsStringify(c.response);
-  if (err) parts.push("错误: " + err);
-  if (resp) parts.push("返回: " + resp);
-  return parts.join("；");
+function recordsChannelFailureParts(c) {
+  if (!c || c.success) return null;
+  const err = recordsStringify(c.error).trim();
+  const resp = recordsStringify(c.response).trim();
+  if (!err && !resp) return null;
+  return { error: err, response: resp };
 }
 
-/* 渠道返回内容：成功时是接口返回的原文（没有就留空），失败时是错误与返回。
-   详情里只呈现这个文本与颜色，不再写「成功/失败」字样。 */
+/* 渠道返回内容（单行文本，用于卡片芯片）：
+   成功给响应原文；失败给「错误原因 · 响应原文」。 */
 function recordsChannelOutput(c) {
   if (!c) return "";
-  if (!c.success) return recordsChannelExtra(c);
-  return recordsStringify(c.response);
+  if (c.success) return recordsStringify(c.response).trim();
+  const parts = recordsChannelFailureParts(c);
+  if (!parts) return "";
+  return [parts.error, parts.response].filter(Boolean).join(" · ");
 }
 
 function recordsShorten(text, maxLen) {
@@ -122,15 +125,29 @@ function recordsBuildDetailHtml(rec, shownSummary) {
     html += "<h2>渠道返回结果</h2>";
     results.forEach(function (c) {
       c = c || {};
-      const out = recordsChannelOutput(c);
+      // 失败：错误原因（红）与响应原文（次要色）分两段并排，靠颜色区分，
+      // 不加「错误:」「返回:」前缀——内容本身自描述（见 recordsChannelFailureParts）。
+      // 成功：只给响应原文；没有就什么都不显示，不塞占位符。
+      let body = "";
+      if (c.success) {
+        const resp = recordsStringify(c.response).trim();
+        if (resp) body = '<span class="detail-channel-resp">' + recordsEscHtml(resp) + "</span>";
+      } else {
+        const parts = recordsChannelFailureParts(c);
+        if (parts) {
+          if (parts.error) {
+            body += '<span class="detail-channel-err">' + recordsEscHtml(parts.error) + "</span>";
+          }
+          if (parts.response) {
+            body += '<span class="detail-channel-resp">' + recordsEscHtml(parts.response) + "</span>";
+          }
+        }
+      }
       html += '<div class="detail-channel-item' + (c.success ? "" : " is-fail") + '">'
         + '<span class="detail-channel-dot ' + (c.success ? "is-ok" : "is-fail")
         + '" aria-hidden="true"></span>'
         + '<span class="detail-channel-name">' + recordsEscHtml(c.channel || "未知渠道") + "</span>"
-        // 只输出「实际的返回内容」：没有就不显示任何文字。
-        // 之前这里塞了「无返回内容」占位符，那是我自己加的解释，
-        // 不是渠道真正返回的东西，去掉。
-        + (out ? '<span class="detail-channel-extra">' + recordsEscHtml(out) + "</span>" : "")
+        + body
         + "</div>";
     });
   } else if (hasFailure) {

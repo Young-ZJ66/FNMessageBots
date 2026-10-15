@@ -544,8 +544,9 @@
 }
 .detail-channel-dot.is-fail { background: var(--err); }
 .detail-channel-name { flex: none; color: var(--text); }
-.detail-channel-extra { color: var(--text-muted); word-break: break-word; }
-.detail-channel-item.is-fail .detail-channel-extra { color: var(--err); }
+/* 失败渠道的两段原文：错误原因用错误色，响应原文用次要色，靠颜色区分、不加前缀 */
+.detail-channel-err { color: var(--err); word-break: break-word; }
+.detail-channel-resp { color: var(--text-muted); word-break: break-word; }
 .detail-summary {
   font-size: var(--fs-sm);
   line-height: 1.7;
