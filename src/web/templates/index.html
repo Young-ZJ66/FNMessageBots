@@ -52,7 +52,10 @@
   </div>
 
   <div id="app-main" class="page" style="display:none;">
-    <aside class="side">
+    <!-- data-hscroll=1 标记「有意横向滚动」的容器：窄屏下侧栏变横向导航条，
+         溢出探针据此不再把它内部的越界算作缺陷。其余容器不加标记，
+         内部一旦横向溢出就会被探针抓出来。 -->
+    <aside class="side" data-hscroll="1">
       <div class="side-brand">
         {% if icon_url %}
         <img class="app-icon" src="{{ icon_url }}" alt="" width="26" height="26" decoding="async" />
@@ -141,7 +144,6 @@
             <div class="footer-actions">
               <button type="button" class="btn btn-ghost" id="records-more" style="display:none;">加载更多</button>
             </div>
-            <div class="detail-wrap" id="detail-panel" style="display:none;"></div>
           </div>
 
           <p class="license-footer">{{ footer_text }}</p>
@@ -160,7 +162,7 @@
                 <button class="add-btn" type="button" id="add-channel-btn"><span>＋</span> 添加渠道</button>
               </div>
             </div>
-            <div class="table-wrap">
+            <div class="table-wrap" data-hscroll="1">
               <table class="channels-table">
                 <thead>
                 <tr>
@@ -186,12 +188,12 @@
           <div class="events-anchor-bar" id="events-anchor-bar"></div>
           <div class="events-cards" id="events-container"></div>
 
-          <div class="section">
-            <div class="section-title">
-              <span>三方应用事件 <small>非NAS系统相关的三方类型相关事件</small></span>
-            </div>
-            <div class="events-cards" id="third-party-events-container"></div>
+          <!-- 三方应用事件不套外层卡片：分组标题是纯文字，分类卡片直接作为兄弟节点。
+               原来外面裹一层 .section，而分类卡片本身也是 .section，于是卡片套卡片。 -->
+          <div class="events-group-label">
+            <span>三方应用事件 <small>非NAS系统相关的三方类型相关事件</small></span>
           </div>
+          <div class="events-cards" id="third-party-events-container"></div>
         </section>
 
         <!-- ── 通知策略 ── -->

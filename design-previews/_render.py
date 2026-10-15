@@ -82,6 +82,33 @@ SHOT_WRAPPER_HTML = """<!DOCTYPE html>
   f.style.height = h + "px";
   f.src = u;
   f.onload = function () {
+    // 页面很长时（如监控事件有 14 个分类）需要先滚到目标位置再截图。
+    // 轮询等待目标出现：内容是异步渲染的。
+    var scrollSel = q.get("scroll");
+    if (scrollSel) {
+      var st = 0;
+      var stimer = setInterval(function () {
+        st++;
+        try {
+          var t = f.contentDocument.querySelector(scrollSel);
+          if (t) { t.scrollIntoView({ block: "start" }); clearInterval(stimer); return; }
+        } catch (e) {}
+        if (st > 40) clearInterval(stimer);
+      }, 150);
+    }
+    if (q.get("expand") === "1") {
+      // 记录是异步拉取后渲染的，onload 时 .record-card 还不存在，
+      // 直接点会静默无效。轮询等它出现再点。
+      var tries = 0;
+      var timer = setInterval(function () {
+        tries++;
+        try {
+          var card = f.contentDocument.querySelector(".record-card");
+          if (card) { card.click(); clearInterval(timer); return; }
+        } catch (e) {}
+        if (tries > 40) clearInterval(timer);
+      }, 150);
+    }
     if (q.get("dirty") === "1") {
       try {
         var d = f.contentDocument;
@@ -104,11 +131,16 @@ OVERFLOW_PROBE_HTML = """<!DOCTYPE html>
 <style>iframe{border:0;display:block;margin:0 0 4px}</style></head>
 <body>
 <script>
+/* 是否位于「有意横向滚动」的容器内。
+   按 data-hscroll 显式标记判断，而不是看 computed overflowX——
+   给容器设 overflow-y:auto 时，overflow-x 会按规范一并计算成 auto
+   （推送记录列表正是纵向滚动容器），于是任何纵向滚动容器都会被误判成
+   「有意横向滚动」，它内部的横向溢出就永远查不出来。
+   现在只有标了 data-hscroll="1" 的容器（窄屏侧栏导航条、渠道表格容器）才跳过。 */
 function inScrollable(el) {
   var p = el.parentElement;
   while (p && p !== el.ownerDocument.body) {
-    var ox = p.ownerDocument.defaultView.getComputedStyle(p).overflowX;
-    if (ox === "auto" || ox === "scroll") return true;
+    if (p.getAttribute && p.getAttribute("data-hscroll") === "1") return true;
     p = p.parentElement;
   }
   return false;
@@ -172,6 +204,14 @@ function measure(path, width) {
             var w0 = tbl.parentElement;
             if (w0) tableFits = tr0.width <= w0.getBoundingClientRect().width + 1;
           }
+          // 记录模块是否为限高内滚：要求「内容高于容器」且「容器高度被封顶」
+          var rl = d.querySelector(".records-list");
+          var rlMetrics = null;
+          if (rl) {
+            rlMetrics = {client: rl.clientHeight, scroll: rl.scrollHeight,
+                         scrollable: rl.scrollHeight > rl.clientHeight + 1,
+                         owned: d.querySelectorAll(".record-card").length};
+          }
           var wrap = d.querySelector(".table-wrap");
           var winfo = null;
           if (wrap) {
@@ -198,6 +238,7 @@ function measure(path, width) {
                    innerWidth: f.contentWindow.innerWidth,
                    mq768: f.contentWindow.matchMedia("(max-width: 768px)").matches,
                    table: tinfo, tableWrap: winfo, tableFits: tableFits,
+                   recordsList: rlMetrics,
                    topbar: tbr ? {w: Math.round(tbr.width), right: Math.round(tbr.right)} : null,
                    probes: probes,
                    computed: (function () {
@@ -314,6 +355,10 @@ def main() -> int:
     ap.add_argument("--themes", default="light")
     ap.add_argument("--exact-width", type=int, default=0,
                     help="在指定宽度的 iframe 内渲染再截图（绕开 Chrome 的最小窗口宽度）")
+    ap.add_argument("--scroll", default="",
+                    help="截图前滚动到该选择器（配合 --exact-width 用于长页面）")
+    ap.add_argument("--expand-record", action="store_true",
+                    help="截图前点击第一张推送记录卡片，验证详情就地展开")
     ap.add_argument("--dirty", action="store_true",
                     help="截图前触发一次输入事件，模拟「有未保存更改」状态")
     ap.add_argument("--verbose", action="store_true",
@@ -432,6 +477,11 @@ def main() -> int:
         if args.verbose:
             print()
             for x in rows:
+                if x.get("recordsList"):
+                    print(f"      records-list: client={x['recordsList']['client']} "
+                          f"scroll={x['recordsList']['scroll']} "
+                          f"内滚={x['recordsList']['scrollable']} "
+                          f"卡片数={x['recordsList']['owned']}")
                 if x.get("probes"):
                     print(f"  {x['path']} @ {x['width']}px innerWidth={x.get('innerWidth')} "
                           f"client={x['clientWidth']} scroll={x['scrollWidth']}")
@@ -480,7 +530,9 @@ def main() -> int:
                 h = args.height
                 url = (f"http://127.0.0.1:{port}/assets/_shot.html"
                        f"?u={path}&w={w}&h={h}"
-                       + ("&dirty=1" if args.dirty else ""))
+                       + ("&dirty=1" if args.dirty else "")
+                       + ("&expand=1" if args.expand_record else "")
+                       + (f"&scroll={args.scroll}" if args.scroll else ""))
                 win = f"--window-size={w},{h}"
             else:
                 url = f"http://127.0.0.1:{port}{path}"

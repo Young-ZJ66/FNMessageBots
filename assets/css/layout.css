@@ -322,6 +322,19 @@
 
 /* ── 监控事件：每个分类一张卡片，卡片内一行一个事件项 ── */
 .events-cards { display: flex; flex-direction: column; gap: var(--sp-5); }
+/* 分组标题（如「三方应用事件」）：只是文字，不套卡片——
+   套了就会变成卡片里再放卡片，视觉上多一层无意义的框。 */
+.events-group-label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  color: var(--text);
+}
+.events-group-label small { font-weight: var(--fw-normal); font-size: var(--fs-sm); color: var(--text-faint); }
 /* 顶部导航与顶栏是 sticky 的，锚点滚动要留出它们的高度，否则卡片标题被盖住 */
 .event-category { scroll-margin-top: 84px; }
 .event-category-header {
@@ -367,17 +380,30 @@
 .event-row:last-child { border-bottom: 0; padding-bottom: 0; }
 .event-row .field-helper { margin: 2px 0 0; }
 .event-name { font-size: var(--fs-md); color: var(--text); }
-/* 锚点条浮在卡片上方，随滚动保持可见，便于在长列表里跳分类 */
+/* 锚点条浮在卡片上方，随滚动保持可见，便于在长列表里跳分类。
+   top 要避开 sticky 顶栏（两者都钉 top:0 会重叠，顶栏按钮会从锚点条两侧露出来）。 */
 .events-anchor-bar, .event-anchor-bar {
   position: sticky;
-  top: 0;
+  top: var(--topbar-h);
   z-index: var(--z-sticky);
   padding: var(--sp-2) 0;
   background: var(--bg);
 }
 
 /* ── 推送记录：卡片列表（原为独立页面的表格） ── */
-.records-list { display: flex; flex-direction: column; gap: var(--sp-3); }
+.records-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  /* 记录条数上限是一万，不能在页面里一直往下排：模块内滚动。
+     注意 overflow-y:auto 会让 overflow-x 一并计算成 auto（规范如此），
+     于是溢出探针不能再靠 computed overflowX 判断「是否有意横向滚动」——
+     已改为按 data-hscroll 标记，未标记的容器内部横向溢出仍会被抓出来。 */
+  max-height: min(60vh, 620px);
+  overflow-y: auto;
+  padding-right: var(--sp-2);
+  overscroll-behavior: contain;
+}
 .record-card {
   padding: var(--sp-3) var(--sp-4);
   border: 1px solid var(--border);
@@ -388,6 +414,8 @@
 }
 .record-card:hover { border-color: var(--border-strong); background: var(--surface-2); }
 .record-card:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring-weak); }
+/* 展开中的卡片加高亮边框，避免在同一列卡片里找不到是哪一条展开了 */
+.record-card.is-open { border-color: var(--accent); background: var(--surface-2); }
 /* 失败记录给左侧色条：一列卡片扫一眼就能分出哪些出了问题 */
 .record-card-fail { border-left: 3px solid var(--err); }
 .record-head { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
@@ -434,8 +462,10 @@
 /* ── 记录详情面板 ──
    原先这些样式挂在 [data-page="history"] 下。记录并入概览后 history 页不存在了，
    那些选择器不可能再匹配，故按令牌重写到这里。 */
+/* 就地展开的详情块：复用 .detail-wrap 的外壳，紧跟在卡片内容之后 */
+.record-detail { margin-top: var(--sp-3); cursor: auto; }
+.record-detail-loading { font-size: var(--fs-sm); color: var(--text-muted); }
 .detail-wrap {
-  margin-top: var(--sp-4);
   padding: var(--sp-4);
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -445,17 +475,6 @@
 .detail-head { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-2); }
 .detail-title { font-weight: var(--fw-semibold); font-size: var(--fs-md); color: var(--text); }
 .detail-meta { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text-muted); }
-.detail-close {
-  margin-left: auto;
-  padding: 3px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm);
-  background: var(--surface);
-  color: var(--text-muted);
-  font: var(--fw-medium) var(--fs-sm) / 1.6 var(--font-sans);
-  cursor: pointer;
-}
-.detail-close:hover { background: var(--surface-3); color: var(--text); }
 .detail-summary {
   font-size: var(--fs-sm);
   line-height: 1.7;
