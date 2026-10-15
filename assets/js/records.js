@@ -270,13 +270,18 @@ function recordsToggleDetail(card) {
 function recordsMergedDisk(detail) {
   if (!detail) return null;
   const ed = (detail.event_data && typeof detail.event_data === "object") ? detail.event_data : null;
-  const items = Array.isArray(detail.merged_items) ? detail.merged_items
-    : (ed && Array.isArray(ed.merged_disks)) ? ed.merged_disks
-      : [];
+  // 只有真正拿到逐条明细才算「有合并明细」。两条判据：
+  //   detail.merged_items（补记记录）/ detail.event_data.merged_disks（直接发送的普通记录）
+  // 不能拿 event_data.count 之类的普通字段当判据——那是很多事件载荷里都有的键，
+  // 会把 SSH 登录这类记录误判成合并推送；也不能只看 merged_count，
+  // 老记录里它只剩一个条数、没有明细，展开后什么都看不到
+  // （之前还会写出「仅记录前 0 条」这种无从解释的字样）。
+  const items = (Array.isArray(detail.merged_items) && detail.merged_items.length) ? detail.merged_items
+    : (ed && Array.isArray(ed.merged_disks) && ed.merged_disks.length) ? ed.merged_disks
+      : null;
+  if (!items) return null;
   const rawTotal = Number(detail.merged_count || (ed && ed.count) || 0) || 0;
-  const total = rawTotal || items.length;
-  if (!total && !items.length) return null;
-  return { items: items, total: total };
+  return { items: items, total: Math.max(rawTotal, items.length) };
 }
 
 /* 卡片之外还有没有值得展开的内容：
