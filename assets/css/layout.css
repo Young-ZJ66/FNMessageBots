@@ -145,56 +145,95 @@
 }
 .save-bar.is-dirty .btn-primary { box-shadow: 0 0 0 3px var(--ring-weak); }
 
-/* ── 按钮观感收敛 ──
-   提取出来的按钮样式是全圆角(pill) + 大范围青色外发光（box-shadow: 0 12px 22px）。
-   那在旧的居中卡片里尚可，放到顶栏与密集布局中就像一块光斑，也偏「消费级」。
-   Calm Cyan 要的是干净体面，故改为小圆角 + 无发光：
-   只在「有未保存更改」时给一圈明确的环形提示，那时它才是有意义的信号。
+/* ── 按钮：一套统一的尺寸基准 ──
+   实测（真实浏览器测量，非目测）原来有六种高度：删除 25 / 深色 30 / 添加渠道 32 /
+   保存配置 36 / 发送测试消息 38 / 常见问题页的深色 41。同一行里也不一致：
+   「全部」(36px) 与「成功·失败」(38px) 并排高矮不同。
 
-   用 [data-page] 前缀（任意页面）是为了与 app.css 里 [data-page="…"] .btn 同级，
-   靠本文件后加载取胜；只写 .btn 会因优先级更低而被压过。 */
-[data-page] .btn { border-radius: var(--r-sm); }
-[data-page] .btn-primary {
-  background: var(--accent);
-  box-shadow: none;
-  transition: background-color var(--tr), box-shadow var(--tr);
+   根因有两类：
+   · .btn 没设 box-sizing，而 .btn-ghost 带 1px 边框、.btn-primary 不带，
+     边框把高度撑了 2px；
+   · .theme-btn / .add-btn / .btn-danger 各有各的字号(12px)与内边距。
+
+   统一为「向主按钮看齐」——不把主按钮改小，而是让其它按钮与它一致：
+   box-sizing: border-box + 固定高度 + 同一字号与圆角。只保留一个明确的小尺寸
+   变体 .btn-danger（表格行内的删除），其高度与同一行的开关(26px)对齐。
+
+   [data-page] 前缀是为了与 app.css 里 [data-page="…"] .btn 同级，靠本文件后加载取胜；
+   只写 .btn 会因优先级更低而被压过。 */
+[data-page] .btn,
+[data-page] .add-btn,
+[data-page] .theme-btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: var(--btn-h);
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-sm);
+  font-family: var(--font-sans);
+  font-size: var(--btn-fs);
+  font-weight: var(--fw-medium);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--tr), border-color var(--tr),
+              color var(--tr), box-shadow var(--tr);
 }
-[data-page] .btn-primary:hover {
+/* 主按钮：实心强调色，不带外发光——旧样式那圈 0 12px 22px 的发光在顶栏里像光斑 */
+[data-page] .btn-primary,
+[data-page] .add-btn {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: 0;
+  box-shadow: none;
+}
+[data-page] .btn-primary:hover,
+[data-page] .add-btn:hover {
   background: var(--accent-hover);
   box-shadow: none;
   transform: none;
 }
-[data-page] .btn-danger,
-[data-page] .add-btn { border-radius: var(--r-sm); }
-[data-page] .add-btn { padding: 6px 12px; }
-
-/* 区块内的操作按钮左对齐：右对齐会让它跑到卡片另一侧，与上方说明脱节 */
-[data-page="index"] .section .footer-actions { justify-content: flex-start; }
-
-.theme-btn {
-  font: var(--fw-medium) var(--fs-sm) / 1 var(--font-sans);
-  color: var(--text-muted);
-  background: none;
+[data-page] .add-btn { min-width: 0; }
+[data-page] .add-btn span { font-size: var(--fs-lg); line-height: 1; }
+/* 次要按钮：必须看得出能点。原来是 background: var(--surface)，与卡片同色又无边框，
+   在卡片里几乎不可见（用户反馈「不知道这是按钮」）。 */
+[data-page] .btn-ghost {
+  background: var(--surface-2);
   border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm);
-  padding: 8px 12px;
-  cursor: pointer;
-  transition: background-color var(--tr), color var(--tr), border-color var(--tr);
-  /* 必须显式重置这几个：app.css 的 index 段里还留着旧「圆形主题切换器」的
-     min-width/height/border-radius（30px 圆钮）。它属于已删除的 .theme-switcher，
-     但仍会命中新的文字按钮，把「深色」挤成两行的小圆圈。
-     用 [data-page] 前缀同 app.css 同级，靠本文件后加载取胜。 */
-  min-width: 0;
-  height: auto;
-  white-space: nowrap;
+  color: var(--text);
 }
+[data-page] .btn-ghost:hover { background: var(--surface-3); border-color: var(--text-faint); }
 [data-page] .theme-btn {
   min-width: 0;
-  height: auto;
-  border-radius: var(--r-sm);
-  white-space: nowrap;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
 }
-.theme-btn:hover { background: var(--surface-2); color: var(--text); }
+[data-page] .theme-btn:hover { background: var(--surface-3); color: var(--text); }
+/* 紧凑变体：仅用于表格行内的删除。高度对齐同一行的开关(26px)，否则那一列会看起来高低不齐 */
+[data-page] .btn-danger {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  height: var(--btn-h-sm);
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--err-soft);
+  color: var(--err);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--tr), color var(--tr);
+}
+[data-page] .btn-danger:hover { background: var(--err); color: var(--accent-fg); }
+[data-page] .btn:disabled { opacity: .55; cursor: not-allowed; }
+[data-page] .btn:disabled:hover { background: var(--surface-2); border-color: var(--border-strong); }
 
 /* ── 内容区与页签 ── */
 .main-body { padding: var(--sp-6); display: flex; flex-direction: column; gap: var(--sp-5); }
@@ -592,20 +631,14 @@
   }
 }
 
-/* 用 ID 选择器（优先级 1,0,0）针对这两个确定的元素，而不是靠类名去拼优先级：
-   - app.css 里是 [data-page="index"] .theme-btn，其中 min-width:30px/height:30px/
-     border-radius:999px 属于已删除的旧「圆形主题切换器」，仍会命中新的文字按钮；
-   - app.css 里是 [data-page="index"] .save-bar.is-dirty .save-dirty-hint（4 个类级），
-     普通类选择器压不过它。
-   另外 .save-bar 是 flex 容器，主题按钮作为 flex 项会在空间不足时被压缩，
-   文字随即换行成竖排——所以必须 flex: none + nowrap。 */
+/* 主题切换按钮：尺寸已由上面的按钮基准统一，这里只补基准管不到的两点——
+   .save-bar 是 flex 容器，它是 flex 项，空间不足时会被压缩导致文字换行成竖排；
+   所以必须 flex: none + nowrap。用 ID（优先级 1,0,0）保证压过 app.css 里那条
+   属于已删除 .theme-switcher 的 [data-page="index"] .theme-btn 圆形样式。 */
 #theme-toggle-btn {
   flex: none;
   min-width: 0;
-  height: auto;
   white-space: nowrap;
-  border-radius: var(--r-sm);
-  padding: 8px 12px;
 }
 
 /* ── 窄屏：顶栏必须保证保存按钮可点 ──
@@ -613,7 +646,7 @@
    窄屏下隐藏提示文字，未保存状态改由保存按钮的环形高亮表达，信息不丢。 */
 @media (max-width: 768px) {
   #save-dirty-hint { display: none; }
-  #theme-toggle-btn { padding: 8px 10px; }
+  #theme-toggle-btn { padding: 0 10px; }
   .topbar { gap: var(--sp-2); }
   .topbar-title { font-size: var(--fs-lg); }
   [data-page] .save-bar { flex: none; }
