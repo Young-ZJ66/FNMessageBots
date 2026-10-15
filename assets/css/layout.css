@@ -511,9 +511,30 @@
   border-radius: var(--r-sm);
 }
 .detail-wrap h2 { margin: var(--sp-4) 0 var(--sp-2); font-size: var(--fs-md); color: var(--text); }
-.detail-head { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-2); }
-.detail-title { font-weight: var(--fw-semibold); font-size: var(--fs-md); color: var(--text); }
-.detail-meta { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text-muted); }
+/* 渠道返回结果：一行一个渠道，用色点表达是否送达。
+   刻意不写「成功/失败」字样——记录里的 success 是「推送是否送达」，
+   与事件本身的性质无关；某条渠道有没有送达，看它后面那段返回内容
+   （失败时是错误原文）最直接。 */
+.detail-channel-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  line-height: 1.8;
+  word-break: break-word;
+}
+.detail-channel-dot {
+  flex: none;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+.detail-channel-dot.is-fail { background: var(--err); }
+.detail-channel-name { flex: none; color: var(--text); }
+.detail-channel-extra { color: var(--text-muted); word-break: break-word; }
+.detail-channel-item.is-fail .detail-channel-extra { color: var(--err); }
 .detail-summary {
   font-size: var(--fs-sm);
   line-height: 1.7;
@@ -521,8 +542,6 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
-.detail-channel-item { font-size: var(--fs-sm); line-height: 1.8; word-break: break-word; }
-.detail-channel-extra { margin-left: 6px; color: var(--text-muted); }
 .detail-batch { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
 .detail-batch th, .detail-batch td {
   padding: 5px 8px;
@@ -534,8 +553,6 @@
 .detail-batch th { color: var(--text-muted); font-weight: var(--fw-medium); }
 .detail-batch-time { white-space: nowrap; color: var(--text-muted); font-family: var(--font-mono); }
 /* 详情与卡片里的成功/失败文字（原来只在 history 段的表格单元格里） */
-.result-ok { color: var(--ok); font-weight: var(--fw-semibold); }
-.result-fail { color: var(--err); font-weight: var(--fw-semibold); }
 
 /* ── 渠道卡片头部：测试推送 + 添加渠道 ── */
 .channels-actions { display: inline-flex; align-items: center; gap: var(--sp-2); flex: none; }

@@ -28,7 +28,12 @@ function recordsStringify(value) {
   try { return JSON.stringify(value); } catch (e) { return String(value); }
 }
 
-/* 单条渠道的结果说明：成功时没有附加信息，失败时给出错误与返回内容。 */
+/* 单条渠道的结果说明（用于**失败的**渠道）：给出错误与返回内容。
+   成功时返回空串——成功渠道没有额外信息要说，界面也不显示「成功」二字，
+   直接把渠道返回的内容摊开就够了。
+   记录里的 success 指的是「推送是否送达」（至少一个渠道成功即算成功），
+   与事件本身是好消息还是坏消息无关，所以文案一律写「推送成功/推送失败」，
+   不要只写「成功/失败」以免与事件性质混淆。 */
 function recordsChannelExtra(c) {
   if (!c || c.success) return "";
   const parts = [];
@@ -37,6 +42,14 @@ function recordsChannelExtra(c) {
   if (err) parts.push("错误: " + err);
   if (resp) parts.push("返回: " + resp);
   return parts.join("；") || "无返回详情";
+}
+
+/* 渠道返回内容：成功时是接口返回的原文（没有就留空），失败时是错误与返回。
+   详情里只呈现这个文本与颜色，不再写「成功/失败」字样。 */
+function recordsChannelOutput(c) {
+  if (!c) return "";
+  if (!c.success) return recordsChannelExtra(c);
+  return recordsStringify(c.response);
 }
 
 function recordsShorten(text, maxLen) {
@@ -70,35 +83,51 @@ function recordsHandleUnauthorized() {
    而且看不出是哪一条的详情。现在展开在卡片里，点一下开、再点一下收。
    详情 HTML 缓存在卡片元素上，重复展开不重复请求。 */
 
-/* 把详情内容渲染成 HTML。失败时返回空串，由调用方决定是否提示。 */
-function recordsBuildDetailHtml(rec) {
+/* 把详情内容渲染成 HTML：只呈现**推送内容**与**渠道返回结果**。
+   刻意不在这里写「成功/失败」——
+   记录里的 success 表示「推送是否送达」，与事件本身的好坏无关，
+   放在详情里既多余又容易与事件性质混淆；某条渠道有没有送达，
+   看它后面那段返回内容（或它的颜色）就知道了。
+   卡片头部已经显示了时间与事件类型，这里不重复。 */
+function recordsBuildDetailHtml(rec, shownSummary) {
   let detail = rec.detail;
   if (typeof detail === "string") {
     try { detail = JSON.parse(detail); } catch (e) { detail = null; }
   }
-  let html = '<div class="detail-head">';
-  html += '<span class="detail-title">'
-    + recordsEscHtml(rec.event_type_label || rec.event_type || "") + "</span>";
-  html += '<span class="detail-meta">' + recordsEscHtml(rec.created_at || "") + "</span>";
-  html += '<span class="' + (rec.success ? "result-ok" : "result-fail") + '">'
-    + (rec.success ? "成功" : "失败") + "</span>";
-  html += "</div>";
-  if (rec.summary) html += '<div class="detail-summary">' + recordsEscHtml(rec.summary) + "</div>";
-  if (detail && Array.isArray(detail.channel_results) && detail.channel_results.length) {
+  const results = (detail && Array.isArray(detail.channel_results)) ? detail.channel_results : [];
+  const hasBatch = !!(detail && Array.isArray(detail.batch_items) && detail.batch_items.length);
+  const hasFailure = !!(detail && detail.failure_summary);
+
+  let html = "";
+
+  // 卡片那一行已经显示了同样的摘要，详情里再写一遍就是同一句话挨着出现两次。
+  // 所以只在「详情里的摘要与卡片不同」或「不写它就只剩空详情」时才展示。
+  const redundant = rec.summary && shownSummary && rec.summary === shownSummary;
+  if (rec.summary && (!redundant || (!results.length && !hasBatch && !hasFailure))) {
+    html += "<h2>推送内容</h2><div class=\"detail-summary\">"
+      + recordsEscHtml(rec.summary) + "</div>";
+  }
+
+  if (results.length) {
     html += "<h2>渠道返回结果</h2>";
-    detail.channel_results.forEach(function (c) {
+    results.forEach(function (c) {
       c = c || {};
-      const extra = recordsChannelExtra(c);
-      html += '<div class="detail-channel-item">' + recordsEscHtml(c.channel || "未知渠道")
-        + ": " + (c.success ? "成功" : "失败")
-        + (extra ? '<span class="detail-channel-extra">' + recordsEscHtml(extra) + "</span>" : "")
+      const out = recordsChannelOutput(c);
+      html += '<div class="detail-channel-item' + (c.success ? "" : " is-fail") + '">'
+        + '<span class="detail-channel-dot ' + (c.success ? "is-ok" : "is-fail")
+        + '" aria-hidden="true"></span>'
+        + '<span class="detail-channel-name">' + recordsEscHtml(c.channel || "未知渠道") + "</span>"
+        + '<span class="detail-channel-extra">'
+        + (out ? recordsEscHtml(out) : "无返回内容") + "</span>"
         + "</div>";
     });
-  } else if (detail && detail.failure_summary) {
-    html += "<h2>失败原因</h2><div class=\"detail-summary\">"
+  } else if (hasFailure) {
+    // 没有逐渠道明细时，只给出错误原文
+    html += "<h2>错误信息</h2><div class=\"detail-summary\">"
       + recordsEscHtml(recordsStringify(detail.failure_summary)) + "</div>";
   }
-  if (detail && Array.isArray(detail.batch_items) && detail.batch_items.length) {
+
+  if (hasBatch) {
     const total = Number(detail.batch_total || detail.batch_items.length) || detail.batch_items.length;
     const capped = detail.batch_items.length < total;
     html += "<h2>批次明细（共 " + total + " 条"
@@ -113,6 +142,11 @@ function recordsBuildDetailHtml(rec) {
         + "<td>" + recordsEscHtml(it.brief || "") + "</td></tr>";
     });
     html += "</tbody></table>";
+  }
+
+  // 都没有（例如只有事件名、没有摘要与渠道明细）时给一句说明，而不是留一片空白
+  if (!html) {
+    html = '<div class="record-detail-loading">该记录没有更多详情</div>';
   }
   return html;
 }
@@ -161,7 +195,8 @@ function recordsToggleDetail(card) {
       box.innerHTML = '<div class="record-detail-loading">详情加载失败</div>';
       return;
     }
-    box.innerHTML = recordsBuildDetailHtml(json.data);
+    const shownSummaryEl = card.querySelector(".record-summary");
+    box.innerHTML = recordsBuildDetailHtml(json.data, shownSummaryEl ? shownSummaryEl.textContent : "");
     box.dataset.loaded = "1";
     // 详情里的内容可能比卡片高，展开后再校正一次位置
     card.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -172,9 +207,12 @@ function recordsToggleDetail(card) {
 
 
 /* ── 卡片 ── */
-/* 一条记录一张卡：首行是时间 / 事件类型 / 结果，随后是摘要与各渠道结果，
+/* 一条记录一张卡：首行是时间 / 事件类型 / 推送结果，随后是摘要与各渠道，
    末尾预留一个隐藏的详情容器，展开时就地填进去。
-   整卡可点（也支持 Enter/空格）切换详情展开。 */
+   整卡可点（也支持 Enter/空格）切换详情展开。
+   徽标写「推送成功/推送失败」而不是「成功/失败」：记录里的 success 是
+   「推送是否送达」的结果，与事件本身是好消息还是坏消息无关
+   （例如「任务计划执行失败」这条事件推送成功，只写「成功」会读起来矛盾）。 */
 function recordsBuildCard(record) {
   const card = document.createElement("article");
   card.className = "record-card" + (record.success ? "" : " record-card-fail");
@@ -201,7 +239,7 @@ function recordsBuildCard(record) {
 
   const badge = document.createElement("span");
   badge.className = "record-badge " + (record.success ? "record-badge-ok" : "record-badge-fail");
-  badge.textContent = record.success ? "成功" : "失败";
+  badge.textContent = record.success ? "推送成功" : "推送失败";
   head.appendChild(badge);
 
   card.appendChild(head);
@@ -218,10 +256,15 @@ function recordsBuildCard(record) {
     results.forEach(function (c) {
       c = c || {};
       const chip = document.createElement("span");
-      const extra = recordsChannelExtra(c);
+      const out = recordsChannelOutput(c);
       chip.className = "record-channel " + (c.success ? "is-ok" : "is-fail");
-      chip.textContent = (c.channel || "未知渠道") + " · " + (c.success ? "成功" : "失败");
-      if (extra) chip.title = extra;
+      // 只写渠道名；有返回内容（成功时的接口原文、失败时的错误与返回）就附上。
+      // 不写「成功/失败」：卡片右上角已有推送结果徽标，逐渠道再写一遍既重复，
+      // 又会与事件性质混淆；失败与否看这段返回内容最直接。
+      chip.textContent = out
+        ? (c.channel || "未知渠道") + " · " + recordsShorten(out, 48)
+        : (c.channel || "未知渠道");
+      if (out) chip.title = out;
       list.appendChild(chip);
     });
     card.appendChild(list);
