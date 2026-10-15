@@ -28,9 +28,9 @@ function recordsStringify(value) {
   try { return JSON.stringify(value); } catch (e) { return String(value); }
 }
 
-/* 单条渠道的结果说明（用于**失败的**渠道）：给出错误与返回内容。
-   成功时返回空串——成功渠道没有额外信息要说，界面也不显示「成功」二字，
-   直接把渠道返回的内容摊开就够了。
+/* 单条渠道的结果说明（用于**失败的**渠道）：给出错误与返回内容原文。
+   成功时返回空串，失败但两者都没有时也返回空串——一律不编造文字，
+   只展示渠道真正返回的东西。
    记录里的 success 指的是「推送是否送达」（至少一个渠道成功即算成功），
    与事件本身是好消息还是坏消息无关，所以文案一律写「推送成功/推送失败」，
    不要只写「成功/失败」以免与事件性质混淆。 */
@@ -41,7 +41,7 @@ function recordsChannelExtra(c) {
   const resp = recordsStringify(c.response);
   if (err) parts.push("错误: " + err);
   if (resp) parts.push("返回: " + resp);
-  return parts.join("；") || "无返回详情";
+  return parts.join("；");
 }
 
 /* 渠道返回内容：成功时是接口返回的原文（没有就留空），失败时是错误与返回。
@@ -117,8 +117,10 @@ function recordsBuildDetailHtml(rec, shownSummary) {
         + '<span class="detail-channel-dot ' + (c.success ? "is-ok" : "is-fail")
         + '" aria-hidden="true"></span>'
         + '<span class="detail-channel-name">' + recordsEscHtml(c.channel || "未知渠道") + "</span>"
-        + '<span class="detail-channel-extra">'
-        + (out ? recordsEscHtml(out) : "无返回内容") + "</span>"
+        // 只输出「实际的返回内容」：没有就不显示任何文字。
+        // 之前这里塞了「无返回内容」占位符，那是我自己加的解释，
+        // 不是渠道真正返回的东西，去掉。
+        + (out ? '<span class="detail-channel-extra">' + recordsEscHtml(out) + "</span>" : "")
         + "</div>";
     });
   } else if (hasFailure) {
