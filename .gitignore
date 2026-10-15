@@ -75,3 +75,6 @@ config/.setup_code
 
 # Test scratch data
 tests/_tmp/
+
+# 前端预览用的本地数据目录（design-previews/serve_preview.py）
+.preview/
