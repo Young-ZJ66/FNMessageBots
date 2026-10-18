@@ -701,6 +701,11 @@ def render(key: str, d: dict) -> str:
 
     theme_attr = "dark" if dark_only else "light"
     hint = "本方向仅提供深色模式" if dark_only else "可按 ?theme=dark / ?theme=light 指定主题"
+    # 深色令牌块在 f-string 外拼好：Python 3.12 之前 f-string 表达式内不允许反斜杠，
+    # 真机 Docker 的 3.11 会直接 SyntaxError
+    dark_block = ""
+    if d.get("tokens_dark"):
+        dark_block = ':root[data-theme="dark"] {\n' + d["tokens_dark"].strip() + "\n}\n"
     return f"""<!DOCTYPE html>
 <html lang="zh-CN" data-theme="{theme_attr}">
 <head>
@@ -713,7 +718,7 @@ def render(key: str, d: dict) -> str:
 :root {{
 {d["tokens"].strip()}
 }}
-{(':root[data-theme="dark"] {\n' + d["tokens_dark"].strip() + '\n}') if d.get("tokens_dark") else ''}
+{dark_block}
 {BASE_CSS.strip()}
 {d["css"].strip()}
 {RESPONSIVE_CSS.strip()}
