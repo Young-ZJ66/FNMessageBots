@@ -157,7 +157,8 @@
 
    统一为「向主按钮看齐」——不把主按钮改小，而是让其它按钮与它一致：
    box-sizing: border-box + 固定高度 + 同一字号与圆角。只保留一个明确的小尺寸
-   变体 .btn-danger（表格行内的删除），其高度与同一行的开关(26px)对齐。
+   变体 .btn-danger（表格行内的删除），高度用 --btn-h-sm（22px）；
+   同一行开关为 26px，删除按钮小于开关是正确的从属关系，反过来才显突兀。
 
    [data-page] 前缀是为了与 app.css 里 [data-page="…"] .btn 同级，靠本文件后加载取胜；
    只写 .btn 会因优先级更低而被压过。 */
@@ -212,7 +213,8 @@
   color: var(--text-muted);
 }
 [data-page] .theme-btn:hover { background: var(--surface-3); color: var(--text); }
-/* 紧凑变体：仅用于表格行内的删除。高度对齐同一行的开关(26px)，否则那一列会看起来高低不齐 */
+/* 紧凑变体：仅用于表格行内的删除。高度用 --btn-h-sm（22px），与同一行开关（26px）
+   相差 4px——按钮小于开关是正确的从属关系，反过来才会显得操作比内容重 */
 [data-page] .btn-danger {
   box-sizing: border-box;
   display: inline-flex;
