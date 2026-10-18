@@ -26,9 +26,10 @@ COPY requirements.txt .
 # 安装Python依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制源代码
+# 复制源代码与管理工具（tools/：推送记录清理等运维脚本，纯标准库无额外依赖）
 COPY src/ ./src/
 COPY assets/ ./assets/
+COPY tools/ ./tools/
 
 # 复制健康检查脚本（已在复制时设置执行权限）
 COPY --chmod=755 healthcheck.sh /app/healthcheck.sh

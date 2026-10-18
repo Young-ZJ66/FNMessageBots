@@ -41,8 +41,9 @@ data
 # Docs / dev-only helpers
 docs
 scripts
-tools
 tests
+# tools 不在此列：log_manager / dedupe_disk_merge_records 等运维脚本
+# 随镜像分发，供 docker exec 使用（纯标准库，不增加依赖体积）
 
 # Misc artifacts
 *.zip
