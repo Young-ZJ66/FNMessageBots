@@ -261,6 +261,15 @@ PYTHONPATH=. LOGGER_DB_PATH=./logger_data.db3 WECHAT_WEBHOOK_URL=xxx python3 src
 
 运行测试：`python tests/run_all.py`（详见 [tests/README.md](tests/README.md)）。
 
+## 从 2.6.x 升级到 2.7+
+
+2.7.0 起推送渠道收敛为**企业微信、钉钉、飞书、通用 Webhook** 四个，升级前请确认：
+
+1. **仍在用 Bark / PushPlus / SMTP 邮件 / MeoW 的**：这些渠道已移除，需改用「通用 Webhook」对接（各平台均为一个 HTTP POST，`webhook_params` 的 body 模板可自定义请求体；配置方法见 [通用 Webhook](docs/channels/webhook.md)）。
+2. **旧 `config.json` 无需手工清理**：其中 `bark_url`、`pushplus_params`、`smtp_params`、`meow_params` 等残留键会被忽略，并在启动日志中提示「可安全删除」。
+3. **环境变量**：`BARK_URL`、`SMTP_PARAMS`、`MEOW_PARAMS` 等不再生效，启动日志会提示。
+4. Web 配置页中已保存的旧渠道行会在下次保存时自动丢弃；升级后请到「推送渠道」页确认渠道列表符合预期。
+
 ## 故障排除
 
 - **收不到通知**：先看启动日志里的 `[schema 自检]` 行（见上文），再检查 Webhook、网络与 `docker compose logs`。

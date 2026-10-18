@@ -108,14 +108,6 @@ class TestGetStatsRedaction(unittest.TestCase):
         self.assertNotIn(MAGIC_TOKEN, blob)
         self.assertIn(SECRET_MASK, stats["wechat_webhook_url"])
 
-    def test_pushplus_uses_https(self):
-        from notifier.multi_platform_notifier import PUSHPLUS_URL
-
-        self.assertTrue(
-            PUSHPLUS_URL.startswith("https://"),
-            "PushPlus 接口须走 HTTPS，避免 token 与消息正文明文传输",
-        )
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

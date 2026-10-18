@@ -8,8 +8,6 @@ import json
 import urllib.parse
 from typing import Any, Dict, Optional, Tuple
 
-MEOW_API_BASE_DEFAULT = "https://api.chuckfang.com"
-
 WEBHOOK_METHODS = ("POST", "GET", "PUT")
 WEBHOOK_CONTENT_TYPES = ("json", "form", "text")
 WEBHOOK_DEFAULT_BODY = '{"title": "{title}", "content": "{content}"}'
@@ -34,29 +32,6 @@ def parse_json_object(raw: str, label: str) -> Tuple[Optional[Dict[str, Any]], s
     if not isinstance(obj, dict):
         return None, f"{label}配置须为 JSON 对象。"
     return obj, ""
-
-
-# ---------- MeoW ----------
-
-def meow_fields(obj: Dict[str, Any]) -> Dict[str, str]:
-    return {
-        "nickname": str(obj.get("nickname") or "").strip(),
-        "url": str(obj.get("url") or "").strip(),
-        "api_base": str(obj.get("api_base") or "").strip().rstrip("/") or MEOW_API_BASE_DEFAULT,
-    }
-
-
-def validate_meow(obj: Dict[str, Any]) -> str:
-    f = meow_fields(obj)
-    if not f["nickname"]:
-        return "MeoW 须填写昵称。"
-    if "/" in f["nickname"]:
-        return "MeoW 昵称不能包含斜杠。"
-    if f["url"] and not _is_http_url(f["url"]):
-        return "MeoW 跳转链接须为 http(s) 地址。"
-    if not _is_http_url(f["api_base"]):
-        return "MeoW API 地址须为 http(s) 地址。"
-    return ""
 
 
 # ---------- 通用 Webhook ----------
@@ -145,11 +120,12 @@ def validate_webhook(obj: Dict[str, Any]) -> str:
 
 
 def validate_channel_json(ch_type: str, raw: str) -> str:
-    """校验 webhook / meow 的单条 JSON 配置，返回错误说明（空串表示通过）。"""
-    label = {"webhook": "通用 Webhook", "meow": "MeoW"}[ch_type]
+    """校验通用 Webhook 的单条 JSON 配置，返回错误说明（空串表示通过）。"""
+    if ch_type != "webhook":
+        raise KeyError(f"未知渠道类型: {ch_type}")
+    label = "通用 Webhook"
     obj, err = parse_json_object(raw, label)
     if err:
         return err
     assert obj is not None
-    validator = {"webhook": validate_webhook, "meow": validate_meow}[ch_type]
-    return validator(obj)
+    return validate_webhook(obj)

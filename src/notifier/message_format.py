@@ -11,18 +11,6 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
-# PushPlus 固定接口地址（HTTPS：token 与消息正文不再明文传输）
-PUSHPLUS_URL = "https://www.pushplus.plus/send"
-
-# MeoW 返回体 status（HTTP 状态统一为 200）
-MEOW_STATUS_HINTS = {
-    "400": "标题或消息参数错误",
-    "403": "内容策略禁止发送",
-    "404": "昵称未注册，请确认 MeoW App 中的昵称；同一 IP 一天内输错 3 次会被封禁",
-    "429": "发送频率超限，非会员 3 秒 1 条、每分钟 15 条、每小时 60 条",
-    "500": "MeoW 服务器错误",
-}
-
 
 def _truncate_utf8(text: str, max_bytes: int) -> str:
     raw = (text or "").encode("utf-8")

@@ -35,7 +35,6 @@ from .message_format import (
     DINGTALK_TITLE_MAX_CHARS,
     FEISHU_BODY_MAX_BYTES,
     MultiPlatformMessage,
-    PUSHPLUS_URL,
     TRUNCATE_SUFFIX,
     WECOM_CONTENT_MAX_BYTES,
     _TRUNCATE_MARGIN,

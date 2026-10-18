@@ -122,7 +122,6 @@ class TestRetiredKeysIgnored(RetiredChannelCase):
         c = self.build()
         self.assertTrue(c.wechat_webhook_url)
         self.assertIn("example.test", c.webhook_params)
-        self.assertIn("me", c.meow_params)
 
     def test_config_file_is_not_rewritten(self):
         """只提示、不改用户的文件（避免升级即改动用户数据）。"""

@@ -48,14 +48,7 @@ class Config:
     dingtalk_webhook_url: str = ""  # 钉钉Webhook URL
     feishu_webhook_url: str = ""   # 飞书Webhook URL
     webhook_params: str = ""  # 通用 Webhook（JSON：url，可选 method/content_type/headers/body；多个用 | 分隔）
-    # 已移除渠道（Bark/PushPlus/SMTP/MeoW）的字段：保留解析仅为兼容旧配置文件，
-    # 通知器不再读取；新配置不应写入这些键
-    bark_url: str = ""
-    bark_icon: str = ""
-    pushplus_params: str = ""
-    smtp_params: str = ""
-    meow_params: str = ""
-    
+
     # 通知标题配置；默认「飞牛NAS」。仅在配置中显式写入空字符串时，推送标题不包含此前缀。
     title_prefix: str = field(default=TITLE_PREFIX_DEFAULT)
     # 极简推送：开启后所有渠道仅推送一行关键信息（默认关闭）
@@ -271,10 +264,6 @@ class Config:
             self.dingtalk_webhook_url = data["dingtalk_webhook_url"]
         if not env_skip("feishu_webhook_url") and "feishu_webhook_url" in data and isinstance(data["feishu_webhook_url"], str):
             self.feishu_webhook_url = data["feishu_webhook_url"]
-        if not env_skip("bark_url") and "bark_url" in data and isinstance(data["bark_url"], str):
-            self.bark_url = data["bark_url"]
-        if not env_skip("bark_icon") and "bark_icon" in data and isinstance(data["bark_icon"], str):
-            self.bark_icon = data["bark_icon"]
         if not env_skip("minimal_push_enabled") and "minimal_push_enabled" in data:
             self.minimal_push_enabled = as_bool(data["minimal_push_enabled"], False)
         if not env_skip("push_markdown_enabled") and "push_markdown_enabled" in data:
@@ -283,21 +272,20 @@ class Config:
             self.push_emoji_enabled = as_bool(data["push_emoji_enabled"], False)
         if not env_skip("ssh_ignore_loopback") and "ssh_ignore_loopback" in data:
             self.ssh_ignore_loopback = as_bool(data["ssh_ignore_loopback"], False)
-        if not env_skip("smtp_params") and "smtp_params" in data and isinstance(data["smtp_params"], str):
-            self.smtp_params = data["smtp_params"]
-        if "pushplus_params" in data and isinstance(data["pushplus_params"], str):
-            self.pushplus_params = data["pushplus_params"]
-        # 已移除的渠道：残留配置不再生效，但要明确提示，避免用户以为还在推送
-        for retired in _RETIRED_CHANNEL_KEYS:
+        # 已移除的渠道（Bark/PushPlus/SMTP/MeoW 及更早的 magic_push/wecom_app）：
+        # 残留配置不再生效，但要明确提示，避免用户以为还在推送
+        _removed_channel_keys = _RETIRED_CHANNEL_KEYS + (
+            "bark_url", "bark_icon", "pushplus_params", "smtp_params", "meow_params",
+        )
+        for retired in _removed_channel_keys:
             if data.get(retired):
                 _logger.info(
                     "配置项 `%s` 对应的推送渠道已移除，该项被忽略（可安全删除）；"
                     "如需该渠道可改用「通用 Webhook」自行对接",
                     retired,
                 )
-        for key in ("webhook_params", "meow_params"):
-            if not env_skip(key) and isinstance(data.get(key), str):
-                setattr(self, key, data[key])
+        if not env_skip("webhook_params") and isinstance(data.get("webhook_params"), str):
+            self.webhook_params = data["webhook_params"]
         if "title_prefix" in data and isinstance(data["title_prefix"], str):
             self.title_prefix = (data["title_prefix"] or "").strip()
         if not env_skip("log_retention_days") and "log_retention_days" in data and data["log_retention_days"] is not None:
@@ -388,12 +376,6 @@ class Config:
             self.feishu_webhook_url = feishu_webhook
             self._env_set_keys.add('feishu_webhook_url')
 
-        if bark_url := os.getenv('BARK_URL'):
-            self.bark_url = bark_url
-            self._env_set_keys.add('bark_url')
-        if bark_icon := os.getenv('BARK_ICON'):
-            self.bark_icon = bark_icon
-            self._env_set_keys.add('bark_icon')
         if minimal_push_enabled := os.getenv('MINIMAL_PUSH_ENABLED'):
             self.minimal_push_enabled = minimal_push_enabled.lower() in ['1', 'true', 'yes', 'on']
             self._env_set_keys.add('minimal_push_enabled')
@@ -406,18 +388,14 @@ class Config:
         if ssh_ignore_loopback := os.getenv('SSH_IGNORE_LOOPBACK'):
             self.ssh_ignore_loopback = ssh_ignore_loopback.lower() in ['1', 'true', 'yes', 'on']
             self._env_set_keys.add('ssh_ignore_loopback')
-        if smtp_params := os.getenv('SMTP_PARAMS'):
-            self.smtp_params = smtp_params
-            self._env_set_keys.add('smtp_params')
-        for env_name, key in (
-            ("WEBHOOK_PARAMS", "webhook_params"),
-            ("MEOW_PARAMS", "meow_params"),
-        ):
-            if env_val := os.getenv(env_name):
-                setattr(self, key, env_val)
-                self._env_set_keys.add(key)
+        if webhook_params := os.getenv('WEBHOOK_PARAMS'):
+            self.webhook_params = webhook_params
+            self._env_set_keys.add('webhook_params')
         # 已移除渠道的历史环境变量：不生效但提示一次，避免用户以为还在推送
-        for retired_env in ("WECOM_APP_PARAMS", "MAGIC_PUSH_PARAMS"):
+        for retired_env in (
+            "WECOM_APP_PARAMS", "MAGIC_PUSH_PARAMS",
+            "BARK_URL", "BARK_ICON", "SMTP_PARAMS", "MEOW_PARAMS",
+        ):
             if os.getenv(retired_env):
                 _logger.info("环境变量 %s 对应的推送渠道已移除，该变量被忽略", retired_env)
 
