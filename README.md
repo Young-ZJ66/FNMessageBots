@@ -281,6 +281,4 @@ PYTHONPATH=. LOGGER_DB_PATH=./logger_data.db3 WECHAT_WEBHOOK_URL=xxx python3 src
 
 ## 许可证
 
-本项目基于 [Sunanang/FNMessageBots](https://github.com/Sunanang/FNMessageBots)（MIT License）fork 而来，本仓库的修改同样以 [MIT License](https://opensource.org/licenses/MIT) 发布。许可证全文见仓库根目录 [`LICENSE`](LICENSE)。
-
-MIT 许可证要求在软件的所有副本或实质性部分中保留原始版权声明与许可声明，因此 `LICENSE` 中 `Copyright (c) 2024 Sunanang` 的版权行按原文保留。
+本项目基于 [Sunanang/FNMessageBots](https://github.com/Sunanang/FNMessageBots) fork 而来，本仓库的修改同样以 [MIT License](https://opensource.org/licenses/MIT) 发布，许可证全文见仓库根目录 [`LICENSE`](LICENSE)。
