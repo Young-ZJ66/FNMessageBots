@@ -192,8 +192,6 @@ def _mask_url(url: str) -> str:
 
 # JSON 配置渠道：字段 → 打码函数（还原时比较「打码(已存值) == 提交值」）
 _JSON_SECRET_FIELDS: Dict[str, Dict[str, Callable[[str], str]]] = {
-    "pushplus": {"token": mask_secret},
-    "smtp": {"password": mask_secret},
     "webhook": {"url": _mask_url, "headers": _mask_headers},
 }
 

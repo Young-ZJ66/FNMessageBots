@@ -871,11 +871,7 @@ class UnifiedNotifier:
                 'wechat': False,
                 'dingtalk': False,
                 'feishu': False,
-                'bark': False,
-                'pushplus': False,
-                'smtp': False,
                 'webhook': False,
-                'meow': False,
             }
         }
     

@@ -118,11 +118,6 @@ class TestRegistryIntegrity(unittest.TestCase):
         self.assertEqual(len(labels), len(set(labels)))
         self.assertTrue(all(x.strip() for x in labels))
 
-    def test_channel_spec_defaults(self):
-        spec = ChannelSpec("k", "L", "attr", "_send")
-        self.assertFalse(spec.uses_bark_message)
-        self.assertTrue(ChannelSpec("k", "L", "attr", "_send", True).uses_bark_message)
-
 
 class TestDispatch(RegistryCase):
     def test_one_request_per_configured_channel(self):

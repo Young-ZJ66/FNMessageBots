@@ -194,14 +194,12 @@ class ChannelSpec:
     label:        日志与结果里的中文名
     param_attr:   配置属性名；取值空则跳过该渠道
     sender:       发送方法名（形如 _send_to_xxx，返回 (是否成功, 渠道结果)）
-    uses_bark_message: 该渠道需要「Bark 形态」的消息（标题+正文结构），而非通用消息对象
     """
 
     key: str
     label: str
     param_attr: str
     sender: str
-    uses_bark_message: bool = False
 
 
 # 顺序即发送顺序（与历史行为一致）

@@ -134,34 +134,6 @@ class ChannelSendersMixin:
         results = [self.connection_pool.post(url, message.to_feishu_format()) for url in urls]
         return any(r.get("success") for r in results), self._channel_result("飞书", results)
 
-    def _send_to_pushplus(self, message: MultiPlatformMessage) -> tuple:
-        """发送到 PushPlus。返回 (是否有任一成功, 渠道结果 dict)。"""
-        param_list = self._iter_urls(self.pushplus_params)
-        if not param_list:
-            return False, {"channel": "PushPlus", "success": False, "response": None, "error": "未配置"}
-        results = []
-        for param_str in param_list:
-            try:
-                payload = json.loads(param_str)
-                if not isinstance(payload, dict) or 'token' not in payload:
-                    continue
-                user_title = (payload.get('title') or '').strip()
-                if user_title == '{title}':
-                    final_title = message.title
-                    final_content = message.content
-                else:
-                    final_title = user_title or message.title
-                    final_content = message.merged_plain_text(blank_line_between=True)
-                payload['title'] = final_title
-                payload['content'] = final_content
-                results.append(self.connection_pool.post(PUSHPLUS_URL, payload))
-            except json.JSONDecodeError:
-                results.append({"success": False, "response": None, "error": "参数 JSON 解析失败"})
-            except Exception as e:
-                results.append({"success": False, "response": None, "error": str(e)[:80]})
-        any_ok = any(r.get("success") for r in results)
-        return any_ok, self._channel_result("PushPlus", results)
-
     def _send_to_webhook(self, message: MultiPlatformMessage) -> tuple:
         """通用 Webhook：按用户配置的方法、请求头、请求体模板发送。"""
         param_list = self._iter_urls(self.webhook_params)
