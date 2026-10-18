@@ -281,33 +281,6 @@ PYTHONPATH=. LOGGER_DB_PATH=./logger_data.db3 WECHAT_WEBHOOK_URL=xxx python3 src
 
 ## 许可证
 
-本项目采用 [MIT License](https://opensource.org/licenses/MIT)。与 README 全文一致的纯文本见仓库根目录 [`LICENSE`](LICENSE)。
+本项目基于 [Sunanang/FNMessageBots](https://github.com/Sunanang/FNMessageBots)（MIT License）fork 而来，本仓库的修改同样以 [MIT License](https://opensource.org/licenses/MIT) 发布。许可证全文见仓库根目录 [`LICENSE`](LICENSE)。
 
-> **本仓库是 [Sunanang/FNMessageBots](https://github.com/Sunanang/FNMessageBots) 的 fork。**
-> MIT 许可证明确要求「上述版权声明与许可声明应包含在本软件的所有副本或实质性部分中」，
-> 因此下方版权行与根目录 `LICENSE` **按原文保留、未作改动**；本仓库自身的修改同样以 MIT 许可发布。
-> 这属于许可证的强制要求，不是遗漏的上游内容。
-
-```
-MIT License
-
-Copyright (c) 2024 Sunanang
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
+MIT 许可证要求在软件的所有副本或实质性部分中保留原始版权声明与许可声明，因此 `LICENSE` 中 `Copyright (c) 2024 Sunanang` 的版权行按原文保留。
