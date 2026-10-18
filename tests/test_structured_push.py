@@ -203,37 +203,6 @@ class TestFeishuStructured(NotifierCase):
         self.assertEqual(msg_types, ["post", "text"])
 
 
-class TestPlainChannelsUnaffected(NotifierCase):
-    def test_bark_still_plain_and_plaintext_capable(self):
-        n = self.make(bark_url="https://api.day.app/DEVKEY")
-        try:
-            msg = n._build_bark_message(
-                "LoginSucc", {"user": "a"}, "2026-01-01 12:00:00", "{}"
-            )
-            ok, _ = n._send_to_bark(msg)
-        finally:
-            n.close()
-        self.assertTrue(ok)
-        sent = stub_deps.REQUEST_LOG[-1]["kwargs"]["json"]
-        self.assertEqual(set(sent.keys()) & {"msgtype", "msg_type", "markdown"}, set())
-        self.assertIn("title", sent)
-        self.assertIn("body", sent)
-
-    def test_pushplus_payload_unchanged(self):
-        import json as _json
-
-        n = self.make(pushplus_params=_json.dumps({"token": "tk1"}))
-        try:
-            msg = n._build_bark_message("LoginSucc", {"user": "a"}, "t", "{}")
-            ok, _ = n._send_to_pushplus(msg)
-        finally:
-            n.close()
-        self.assertTrue(ok)
-        sent = stub_deps.REQUEST_LOG[-1]["kwargs"]["json"]
-        self.assertEqual(sent["token"], "tk1")
-        self.assertNotIn("markdown", sent)
-
-
 class TestEmojiReduction(NotifierCase):
     def test_titles_have_no_emoji_by_default(self):
         n = self.make(wechat_webhook_url="http://example.test/x")

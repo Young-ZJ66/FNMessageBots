@@ -1546,15 +1546,6 @@ class ContentBuildersMixin:
             return f"{prefix}-{body}"
         return body
 
-    def _build_bark_message(self, event_type: str, event_data: Dict[str, Any],
-                           timestamp: str, raw_log: str) -> MultiPlatformMessage:
-        """构建Bark消息。标题通过 URL 单独传，正文不再重复包含标题，避免推送时标题显示两次。"""
-        message = self._build_message(event_type, event_data, timestamp, raw_log)
-        # Bark 为纯文本推送（标题 + 正文），不带 markdown，也不保留装饰性图标
-        return MultiPlatformMessage(
-            title=self._clean_text(message.title), content=message.content
-        )
-
     def _append_album_owner_display_line(self, lines: List[str], event_data: Dict[str, Any]) -> None:
         """优先输出自动匹配到的用户名称；否则输出 UID/id 兜底信息。"""
         nick = self._album_nickname_from_map(

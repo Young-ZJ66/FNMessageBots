@@ -12,24 +12,16 @@
 | 企业微信（可以在微信接收消息） | 群机器人 Webhook | [企业微信](channels/wechat.md) |
 | 钉钉 | 群机器人 Webhook | [钉钉](channels/dingtalk.md) |
 | 飞书 | 群机器人 Webhook | [飞书](channels/feishu.md) |
-| Bark | iOS 推送（HTTP API） | [Bark](channels/bark.md) |
-| SMTP 邮件 | 邮箱通知 | [SMTP 邮件](channels/email.md) |
-| PushPlus | 微信模板消息等 | [官方消息接口文档](https://www.pushplus.plus/doc/guide/api.html) |
 | 通用 Webhook | 自定义 HTTP 请求，对接任意平台 | [通用 Webhook](channels/webhook.md) |
-| MeoW | 手机推送 App，填昵称即可 | [MeoW](channels/meow.md) |
 
-> 本项目只保留**个人可自助开通**的常用渠道。若需对接其它平台（Telegram、ntfy、自建推送服务等），用「通用 Webhook」即可。
+> 若需对接其它平台（Telegram、ntfy、Bark、PushPlus、自建推送服务等），用「通用 Webhook」即可。
 
 ## 按渠道打开文档
 
 - [企业微信](channels/wechat.md)
 - [钉钉](channels/dingtalk.md)
 - [飞书](channels/feishu.md)
-- [Bark](channels/bark.md)
-- [SMTP 邮件](channels/email.md)
-- [PushPlus 官方消息接口文档](https://www.pushplus.plus/doc/guide/api.html)
 - [通用 Webhook](channels/webhook.md)
-- [MeoW](channels/meow.md)
 
 ## 环境变量速查
 
@@ -38,11 +30,6 @@
 | `WECHAT_WEBHOOK_URL` 或兼容名 `WEBHOOK_URL` | 企业微信 |
 | `DINGTALK_WEBHOOK_URL` | 钉钉 |
 | `FEISHU_WEBHOOK_URL` | 飞书 |
-| `BARK_URL` | Bark |
-| `SMTP_PARAMS` | SMTP 邮件（`smtp_params`） |
 | `WEBHOOK_PARAMS` | 通用 Webhook（`webhook_params`） |
-| `MEOW_PARAMS` | MeoW（`meow_params`） |
 
-**PushPlus**：在 Web 或 `config.json` 中配置 `pushplus_params`，值为包含 `token` 的 JSON 字符串；多个渠道可用 `|` 分隔，例如 `{"token":"xxx"}|{"token":"yyy"}`。接口与参数说明见 [PushPlus 消息接口文档](https://www.pushplus.plus/doc/guide/api.html)
-
-**SMTP 邮件**：在 Web 或 `config.json` 中配置 `smtp_params`，或通过环境变量 `SMTP_PARAMS` 覆盖；值为 SMTP 参数的 JSON 字符串，多套可用 `|` 分隔。字段与常见邮箱示例见 [SMTP 邮件](channels/email.md)。
+> 历史版本支持过 Bark / SMTP 邮件 / PushPlus / MeoW，现已移除；旧 `config.json` 中这些字段会被忽略，可安全删除。

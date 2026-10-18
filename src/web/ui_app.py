@@ -409,11 +409,7 @@ def create_app(on_config_saved=None) -> Flask:
         {"id": "wechat", "name": "企业微信"},
         {"id": "dingtalk", "name": "钉钉"},
         {"id": "feishu", "name": "飞书"},
-        {"id": "bark", "name": "Bark"},
-        {"id": "pushplus", "name": "PushPlus"},
-        {"id": "smtp", "name": "SMTP邮件"},
         {"id": "webhook", "name": "通用Webhook"},
-        {"id": "meow", "name": "MeoW"},
     ]
 
     # 默认拒绝：只有以下路径无需登录；"/" 仅返回页面骨架，数据全部走需鉴权的接口
@@ -599,7 +595,6 @@ def create_app(on_config_saved=None) -> Flask:
             "selected_events": monitor_events,
             "channels": channels,
             "title_prefix": _title_prefix_from_dict(raw),
-            "bark_icon": (raw.get("bark_icon") or "").strip(),
             "log_retention_days": int(raw.get("log_retention_days", raw.get("max_log_age", 7))),
             "logger_poll_interval": int(raw.get("logger_poll_interval", 3)),
             "resume_from_cursor_on_start": as_bool(raw.get("resume_from_cursor_on_start", False), False),
@@ -649,7 +644,6 @@ def create_app(on_config_saved=None) -> Flask:
         title_prefix = _title_prefix_from_dict(payload)
         if title_prefix and len(title_prefix) > 20:
             return jsonify({"ok": False, "message": "标题前缀过长（最多 20 个字符）。"}), 400
-        bark_icon = (payload.get("bark_icon") or "").strip()
 
         if dnd_enabled:
             if not dnd_start_time or not dnd_end_time:
@@ -690,7 +684,7 @@ def create_app(on_config_saved=None) -> Flask:
                 return jsonify({"ok": False, "message": "存在未知的推送渠道类型。"}), 400
             if not url:
                 return jsonify({"ok": False, "message": "推送渠道地址不能为空。"}), 400
-            if ch_type in ("webhook", "meow"):
+            if ch_type == "webhook":
                 parts = []
                 for part in (p.strip() for p in url.split("|") if p.strip()):
                     err = validate_channel_json(ch_type, part)
@@ -699,30 +693,6 @@ def create_app(on_config_saved=None) -> Flask:
                     # 多条配置以 | 拼接，JSON 字符串内的 | 转义保存
                     parts.append(json.dumps(json.loads(part), ensure_ascii=False).replace("|", "\\u007c"))
                 ch["url"] = "|".join(parts)
-            elif ch_type == "pushplus":
-                try:
-                    obj = json.loads(url)
-                    if not isinstance(obj, dict) or "token" not in obj:
-                        return jsonify({"ok": False, "message": "PushPlus 参数必须是包含 token 的 JSON 对象。"}), 400
-                except json.JSONDecodeError as e:
-                    return jsonify({"ok": False, "message": f"PushPlus 参数不是合法 JSON：{e}"}), 400
-            elif ch_type == "smtp":
-                try:
-                    obj = json.loads(url)
-                    if not isinstance(obj, dict):
-                        return jsonify({"ok": False, "message": "SMTP 配置须为 JSON 对象。"}), 400
-                    server = (obj.get("server") or "").strip()
-                    username = (obj.get("username") or "").strip()
-                    password = obj.get("password") or ""
-                    to_raw = (obj.get("to") or "").strip()
-                    if not server or not username or not password or not to_raw:
-                        return jsonify({"ok": False, "message": "SMTP 须填写服务器、用户名、密码和收件人地址。"}), 400
-                    try:
-                        int(obj.get("port", 465))
-                    except (TypeError, ValueError):
-                        return jsonify({"ok": False, "message": "SMTP 端口必须是整数。"}), 400
-                except json.JSONDecodeError as e:
-                    return jsonify({"ok": False, "message": f"SMTP 配置不是合法 JSON：{e}"}), 400
             elif not url.startswith("http"):
                 return (
                     jsonify({"ok": False, "message": f"推送地址格式不正确：{url}"}),
@@ -768,7 +738,6 @@ def create_app(on_config_saved=None) -> Flask:
                 "nas_patrol_enabled": nas_patrol_enabled,
                 "nas_patrol_cron": nas_patrol_cron,
                 "title_prefix": title_prefix,
-                "bark_icon": bark_icon,
             }
         )
 

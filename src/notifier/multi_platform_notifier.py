@@ -26,7 +26,7 @@ from monitor.sqlite_uri import connect_readonly_with_fallback
 from .channel_senders import ChannelSendersMixin
 from .connection_pool import ConnectionPool, safe_url_for_log
 from .content_builders import ContentBuildersMixin
-from .event_texts import BARK_EVENT_CONTENTS, EVENT_NOTES, EVENT_TITLES
+from .event_texts import EVENT_NOTES, EVENT_TITLES
 from .message_format import (
     CHANNEL_SPECS,
     ChannelSpec,
@@ -87,21 +87,14 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
     
     # 三张文案表定义见 event_texts 模块；此处保留类属性访问兼容
     EVENT_TITLES = EVENT_TITLES
-    
-    BARK_EVENT_CONTENTS = BARK_EVENT_CONTENTS
-    
+
     EVENT_NOTES = EVENT_NOTES
     
     def __init__(self, 
                  wechat_webhook_url: str = "",
                  dingtalk_webhook_url: str = "",
                  feishu_webhook_url: str = "",
-                 bark_url: str = "",
-                 bark_icon: str = "",
-                 pushplus_params: str = "",
-                 smtp_params: str = "",
                  webhook_params: str = "",
-                 meow_params: str = "",
                  title_prefix: str = "",
                  minimal_push_enabled: bool = False,
                  markdown_enabled: bool = True,
@@ -118,16 +111,12 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
                  ):
         """
         初始化通知器
-        
+
         Args:
             wechat_webhook_url: 企业微信Webhook URL
             dingtalk_webhook_url: 钉钉Webhook URL
             feishu_webhook_url: 飞书Webhook URL
-            bark_url: Bark推送URL
-            pushplus_params: PushPlus 参数（JSON 字符串，多个用 | 分隔）
-            smtp_params: SMTP 邮件配置（JSON：server、port、username、password、to，可选 from）
             webhook_params: 通用 Webhook（JSON：url，可选 method/content_type/headers/body）
-            meow_params: MeoW（JSON：nickname，可选 url/api_base）
             dedup_window: 去重时间窗口（秒）
             pool_size: 连接池大小
             retries: 重试次数
@@ -138,21 +127,16 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
                 items 是本次合并的逐条明细（磁盘设备/型号/序列号），推送记录里要靠它
                 才能展开看到「到底哪几块盘醒了」——只记条数的话，明细就只剩推送消息里
                 那一份，事后无法回看。
-        """
+                已移除渠道（Bark/PushPlus/SMTP/MeoW）不再出现在签名中；
+                旧调用方以关键字传入会触发 TypeError，属预期——这些渠道已不再支持。
+            """
         # 日志对象先于合并定时线程建立，避免线程异常分支访问未赋值的 self.logger
         self.logger = logging.getLogger(__name__)
         self.merged_event_recorder = merged_event_recorder
         self.wechat_webhook_url = wechat_webhook_url
         self.dingtalk_webhook_url = dingtalk_webhook_url
         self.feishu_webhook_url = feishu_webhook_url
-        self.bark_url = bark_url
-        self.bark_icon = (bark_icon or "").strip()
-        self.pushplus_params = pushplus_params or ""
-        self.smtp_params = smtp_params or ""
         self.webhook_params = webhook_params or ""
-        self.meow_params = meow_params or ""
-        # MeoW 对同一 IP 一天内 3 次推送未注册昵称会封禁 IP；命中 404 后本实例内停发，保存配置重建后恢复
-        self._meow_unregistered: set = set()
         if not isinstance(title_prefix, str):
             self.title_prefix = ""
         else:
@@ -209,16 +193,8 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
             platforms.append('钉钉')
         if self.feishu_webhook_url:
             platforms.append('飞书')
-        if self.bark_url:
-            platforms.append('Bark')
-        if self.pushplus_params:
-            platforms.append('PushPlus')
-        if self.smtp_params:
-            platforms.append('SMTP邮件')
         if self.webhook_params:
             platforms.append('通用Webhook')
-        if self.meow_params:
-            platforms.append('MeoW')
 
         self.logger.info(f"多平台通知器初始化完成，支持平台: {', '.join(platforms) if platforms else '无'}, 去重窗口: {dedup_window}秒")
 
@@ -251,11 +227,7 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
                     'wechat': bool(self.wechat_webhook_url),
                     'dingtalk': bool(self.dingtalk_webhook_url),
                     'feishu': bool(self.feishu_webhook_url),
-                    'bark': bool(self.bark_url),
-                    'pushplus': bool(self.pushplus_params),
-                    'smtp': bool(self.smtp_params),
                     'webhook': bool(self.webhook_params),
-                    'meow': bool(self.meow_params),
                 }
             }
     
@@ -338,15 +310,7 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
         if self._markdown_wanted() and message.content:
             message.markdown = self._render_markdown_body(event_type, merged_data, ts, "")
 
-        results, channel_results = self._dispatch_channels(
-            message,
-            log_prefix="合并事件",
-            bark_message=(
-                self._build_bark_message(event_type, merged_data, ts, "")
-                if self._needs_bark_message()
-                else None
-            ),
-        )
+        results, channel_results = self._dispatch_channels(message, log_prefix="合并事件")
         if results and any(results):
             self._record_send_result(True)
             self.logger.info(f"合并事件发送成功: {event_type}, 数量: {len(event_list)}")
@@ -363,32 +327,23 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
             )
         return False, channel_results
 
-    def _needs_bark_message(self) -> bool:
-        """是否有渠道需要 Bark 形态的消息（Bark / PushPlus）；没有就不必构造，避免无谓开销。"""
-        return any(
-            getattr(self, spec.param_attr, "") for spec in CHANNEL_SPECS if spec.uses_bark_message
-        )
-
     def _dispatch_channels(
         self,
         message: MultiPlatformMessage,
         *,
         log_prefix: str,
-        bark_message: Optional[MultiPlatformMessage] = None,
     ) -> Tuple[List[bool], List[Dict[str, Any]]]:
         """按 CHANNEL_SPECS 依次投递到所有已配置渠道。
 
-        未配置的渠道（param_attr 为空）直接跳过；Bark/PushPlus 需要 Bark 形态的消息，
-        调用方未提供 bark_message 时退化为使用通用消息（系统通知即如此，与历史行为一致）。
-        返回 (各渠道成功标志, 各渠道结果)，与调用方原先各自维护的两个列表等价。
+        未配置的渠道（param_attr 为空）直接跳过。
+        返回 (各渠道成功标志, 各渠道结果)。
         """
         results: List[bool] = []
         channel_results: List[Dict[str, Any]] = []
         for spec in CHANNEL_SPECS:
             if not getattr(self, spec.param_attr, ""):
                 continue
-            target = bark_message if (spec.uses_bark_message and bark_message is not None) else message
-            ok, cr = getattr(self, spec.sender)(target)
+            ok, cr = getattr(self, spec.sender)(message)
             results.append(ok)
             channel_results.append(cr)
             self.logger.debug("%s-%s: %s", log_prefix, spec.label, cr)
@@ -459,16 +414,8 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
 
         # 构建消息
         message = self._build_message(event_type, event_data, timestamp, raw_log)
-        
-        results, channel_results = self._dispatch_channels(
-            message,
-            log_prefix="通知",
-            bark_message=(
-                self._build_bark_message(event_type, event_data, timestamp, raw_log)
-                if self._needs_bark_message()
-                else None
-            ),
-        )
+
+        results, channel_results = self._dispatch_channels(message, log_prefix="通知")
         
         if results and any(results):  # 至少一个平台发送成功
             if not skip_dedup and event_fingerprint:

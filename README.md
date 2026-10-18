@@ -5,9 +5,9 @@
 ## 功能特性
 
 - **数据库轮询**：定时轮询 eventlogger 的 SQLite 数据库，仅处理启动后的新记录
-- **多平台通知**：企业微信、钉钉、飞书（均支持结构化消息）、Bark、PushPlus、SMTP 邮件、通用 Webhook、MeoW
+- **多平台通知**：企业微信、钉钉、飞书（均支持结构化消息）、通用 Webhook
 - **Web 配置页**：内置配置 UI（默认端口 `18080`），支持 Webhook、事件类型、勿扰、标题前缀、推送记录等；保存后热加载，一般无需重启
-- **Web 访问控制**：所有配置接口均需登录；首次设置密码需填写启动日志中的初始化码（或用 `FNMB_WEB_PASSWORD` 预置），`config.json` 内仅保存盐值与哈希；配置页中的 Webhook key、Token、SMTP 密码会打码显示
+- **Web 访问控制**：所有配置接口均需登录；首次设置密码需填写启动日志中的初始化码（或用 `FNMB_WEB_PASSWORD` 预置），`config.json` 内仅保存盐值与哈希；配置页中的 Webhook key、Token 会打码显示
 - **schema 自检**：首次连接各飞牛数据库时打印实际列名，列名与代码不符时告警（否则查询会静默返回空数据，难以排查）
 - **智能去重**：时间窗口去重（默认 300 秒）
 - **磁盘事件合并**：同类型磁盘唤醒/休眠在时间窗口内合并推送
@@ -61,18 +61,16 @@ python tools/log_manager.py cleanup 30
 
 ### 1. [配置通知渠道](docs/notification-channels.md)
 
-至少配置一个推送渠道；环境变量与 Web 配置页二选一即可（亦可混用）。各平台图文说明见 **[配置通知渠道](docs/notification-channels.md)**（内含企业微信、钉钉、飞书、Bark、SMTP 邮件、PushPlus、通用 Webhook、MeoW 的独立文档入口）。
+至少配置一个推送渠道；环境变量与 Web 配置页二选一即可（亦可混用）。各平台图文说明见 **[配置通知渠道](docs/notification-channels.md)**（内含企业微信、钉钉、飞书、通用 Webhook 的独立文档入口）。
 
-未配置任何 Webhook / PushPlus 时进程仍可启动，仅提供 Web 配置页；配置完成后自动开始监控与推送。
+未配置任何 Webhook 时进程仍可启动，仅提供 Web 配置页；配置完成后自动开始监控与推送。
 
 ### 2. 主要配置项（`config/config.json`）
 
 | 项 | 说明 |
 | --- | --- |
-| `wechat_webhook_url` / `dingtalk_webhook_url` / `feishu_webhook_url` / `bark_url` | 各平台 Webhook 或 Bark URL |
-| `pushplus_params` | PushPlus JSON（可多个，`\|` 分隔） |
+| `wechat_webhook_url` / `dingtalk_webhook_url` / `feishu_webhook_url` | 各平台 Webhook URL |
 | `webhook_params` | 通用 Webhook JSON（可多个，`\|` 分隔），见 [通用 Webhook](docs/channels/webhook.md) |
-| `meow_params` | MeoW JSON（可多个，`\|` 分隔），见 [MeoW](docs/channels/meow.md) |
 | `title_prefix` | 推送标题前缀，留空则使用默认「飞牛NAS」 |
 | `monitor_events` | 要监控的事件 ID 列表 |
 | `log_level` | 日志级别 |
@@ -85,7 +83,7 @@ python tools/log_manager.py cleanup 30
 | `log_retention_days` | 原始推送日志保留天数 |
 | `max_log_age` | 应用运行日志 `monitor_*.log` 保留天数 |
 | `dnd_enabled` / `dnd_start_time` / `dnd_end_time` | 勿扰开关与时段（HH:MM，可跨日） |
-| `push_markdown_enabled` | 结构化消息（默认开启）：企业微信/钉钉用 markdown、飞书用富文本 post 按行分条展示；Bark/PushPlus/SMTP/通用 Webhook 等不支持富文本的渠道仍发纯文本。渠道不支持时自动回退纯文本 |
+| `push_markdown_enabled` | 结构化消息（默认开启）：企业微信/钉钉用 markdown、飞书用富文本 post 按行分条展示；通用 Webhook 由其 body 模板决定。渠道不支持时自动回退纯文本 |
 | `media_batch_summary_enabled` | 高频同类事件聚合推送（默认开启）：影视入库/刮削/删除、文件删除与回收站、共享变更、Docker 容器生命周期（创建/启动/停止/重启/暂停/销毁）等易突发的高频同类事件在静默窗口内合并为一条结构化消息（标题带条数、正文逐条列出）；影视登录/退出、Docker 异常（OOM/DIE/KILL）等会话与告警事件不参与聚合，保持逐条及时推送 |
 | `media_batch_window` | 聚合静默窗口（秒，默认 90）：窗口内无新事件才发送；单条滞留超过窗口 4 倍强制发出；`0` 表示按轮询轮次立即发送 |
 | `push_emoji_enabled` | 已废弃：推送文案模板已不再携带 emoji 图标，此开关保留仅为兼容旧配置，不再产生效果 |
@@ -100,17 +98,13 @@ python tools/log_manager.py cleanup 30
 | 企业微信（群机器人） | `markdown`（`push_markdown_enabled` 关闭时为 `text`） | `content` **最长 4096 字节**、必须 UTF-8；群机器人 markdown 不支持列表语法（`- ` 会原样显示），明细直接按行渲染并支持 `##` 标题；超长按字节截断并标注 |
 | 钉钉（自定义机器人） | `markdown` | `text` **最大 5000 字符**；`title` 另有独立上限（首屏会话透出内容），故预留标题长度后按字符截断；关键词/加签安全设置仍按原配置生效，关键词需出现在消息文本中 |
 | 飞书（自定义机器人） | `post` 富文本 | `content.post.zh_cn.{title, content:[[{tag:"text", text}]]}`；**请求体不超过 20KB**，超长按字节截断；不支持时回退 `text` |
-| Bark | `title` + `body` 纯文本 | Bark 的 markdown 支持是**较新版本的可选字段**，为不破坏既有推送保持纯文本 |
-| PushPlus | 纯文本（HTTPS） | 渲染由 PushPlus 侧模板决定 |
-| SMTP 邮件 | 纯文本正文 | — |
 | 通用 Webhook | 由 `body` 模板决定 | 支持模板变量，形态由使用者掌控 |
-| MeoW | `text` 纯文本 | — |
 
 渠道不支持结构化消息时会**自动回退纯文本**，不会丢通知。若某渠道明确拒绝富文本（格式类错误），进程内会记住该渠道，后续直接发纯文本，避免每条通知都先失败一次污染推送记录 —— 重启进程即重新探测，平台升级后无需改配置。
 
 建议保存配置后用配置页的「测试推送」确认目标群里的实际渲染效果。
 
-官方文档：[企业微信 消息推送配置说明](https://developer.work.weixin.qq.com/document/path/91770) ｜ [钉钉 自定义机器人发送消息的消息类型](https://open.dingtalk.com/document/orgapp/custom-bot-send-message-type) ｜ [钉钉 消息通知类型](https://open.dingtalk.com/document/development/message-types-and-data-format) ｜ [飞书 自定义机器人使用指南](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot) ｜ [Bark README](https://github.com/Finb/Bark/blob/master/README.zh.md)
+官方文档：[企业微信 消息推送配置说明](https://developer.work.weixin.qq.com/document/path/91770) ｜ [钉钉 自定义机器人发送消息的消息类型](https://open.dingtalk.com/document/orgapp/custom-bot-send-message-type) ｜ [钉钉 消息通知类型](https://open.dingtalk.com/document/development/message-types-and-data-format) ｜ [飞书 自定义机器人使用指南](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot)
 
 #### 联调：数据库 schema 自检
 
@@ -269,7 +263,7 @@ PYTHONPATH=. LOGGER_DB_PATH=./logger_data.db3 WECHAT_WEBHOOK_URL=xxx python3 src
 
 ## 故障排除
 
-- **收不到通知**：先看启动日志里的 `[schema 自检]` 行（见上文），再检查 Webhook / PushPlus、网络与 `docker compose logs`。
+- **收不到通知**：先看启动日志里的 `[schema 自检]` 行（见上文），再检查 Webhook、网络与 `docker compose logs`。
 - **收到的不是结构化消息（纯文本）**：确认 `push_markdown_enabled` 已开启且镜像为最新（结构化推送在 2.6.0 引入）；日志中出现「结构化消息发送失败，回退纯文本」说明渠道拒绝了 markdown（多为安全设置或旧版企业微信客户端），进程会记住该渠道改发纯文本，重启容器可重新探测。
 - **影视入库一条一条刷屏**：确认「影视/相册事件聚合推送」已开启（默认开启）并按需调整 `media_batch_window` 静默窗口。
 - **时间不对**：调整 `LOGTIME_DISPLAY_OFFSET_SECONDS`（默认已为 +8 小时）。
@@ -280,7 +274,7 @@ PYTHONPATH=. LOGGER_DB_PATH=./logger_data.db3 WECHAT_WEBHOOK_URL=xxx python3 src
 
 ## 免责声明
 
-- **非官方项目**：本仓库为独立开源作品，与飞牛 NAS、企业微信、钉钉、飞书、Bark、PushPlus 等主体**无隶属、赞助或背书关系**；各产品名称与商标归权利人所有。
+- **非官方项目**：本仓库为独立开源作品，与飞牛 NAS、企业微信、钉钉、飞书等主体**无隶属、赞助或背书关系**；各产品名称与商标归权利人所有。
 - **按现状提供**：除开源许可证另有约定外，作者不对本软件的**正确性、完整性、安全性或持续可用性**作任何明示或默示担保；详见 [`LICENSE`](LICENSE) 中的免责声明条款。
 - **使用风险自负**：部署、配置 Webhook / 第三方推送、开放 Web 配置端口、挂载系统路径等行为均由使用者自行评估与承担；请妥善保管 `config.json`、访问密码与各类 Token，**勿将密钥提交到公开仓库**。
 - **数据与业务影响**：监控与推送依赖 NAS 日志库、网络与各通知渠道服务；**不保证**通知必达、实时或无遗漏，亦不对因依赖本软件而产生的业务中断、数据误解或决策损失承担责任。

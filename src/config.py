@@ -47,12 +47,14 @@ class Config:
     wechat_webhook_url: str = ""  # 企业微信Webhook URL
     dingtalk_webhook_url: str = ""  # 钉钉Webhook URL
     feishu_webhook_url: str = ""   # 飞书Webhook URL
-    bark_url: str = ""  # Bark推送URL
-    bark_icon: str = ""  # Bark 自定义图标 URL（留空使用默认图标）
-    pushplus_params: str = ""  # PushPlus 推送参数（JSON 字符串，多个用 | 分隔）
-    smtp_params: str = ""  # SMTP 邮件参数（JSON：server、port、username、password、from、to；多个用 | 分隔）
     webhook_params: str = ""  # 通用 Webhook（JSON：url，可选 method/content_type/headers/body；多个用 | 分隔）
-    meow_params: str = ""  # MeoW（JSON：nickname，可选 url/api_base；多个用 | 分隔）
+    # 已移除渠道（Bark/PushPlus/SMTP/MeoW）的字段：保留解析仅为兼容旧配置文件，
+    # 通知器不再读取；新配置不应写入这些键
+    bark_url: str = ""
+    bark_icon: str = ""
+    pushplus_params: str = ""
+    smtp_params: str = ""
+    meow_params: str = ""
     
     # 通知标题配置；默认「飞牛NAS」。仅在配置中显式写入空字符串时，推送标题不包含此前缀。
     title_prefix: str = field(default=TITLE_PREFIX_DEFAULT)
@@ -551,46 +553,16 @@ class Config:
         """验证配置（部署时不强制 Webhook，可在 UI 中配置）"""
         if self.wechat_webhook_url and not self.wechat_webhook_url.startswith('http'):
             raise ValueError("WECHAT_WEBHOOK_URL 必须是有效的URL")
-        
+
         if self.dingtalk_webhook_url and not self.dingtalk_webhook_url.startswith('http'):
             raise ValueError("DINGTALK_WEBHOOK_URL 必须是有效的URL")
-        
+
         if self.feishu_webhook_url and not self.feishu_webhook_url.startswith('http'):
             raise ValueError("FEISHU_WEBHOOK_URL 必须是有效的URL")
-        
-        if self.bark_url and not self.bark_url.startswith('http'):
-            raise ValueError("BARK_URL 必须是有效的URL")
 
-        # pushplus_params 为 JSON 或 JSON|JSON...，发送时再校验
-        if self.pushplus_params:
-            for part in (p.strip() for p in self.pushplus_params.split('|') if p.strip()):
-                try:
-                    obj = json.loads(part)
-                    if not isinstance(obj, dict) or 'token' not in obj:
-                        raise ValueError("PushPlus 参数必须为包含 token 的 JSON 对象")
-                except json.JSONDecodeError as e:
-                    raise ValueError(f"PushPlus 参数不是合法 JSON: {e}")
+        # 已移除渠道（bark/pushplus/smtp/meow）的残留配置不再校验、不再生效
 
-        if self.smtp_params:
-            for part in (p.strip() for p in self.smtp_params.split("|") if p.strip()):
-                try:
-                    obj = json.loads(part)
-                    if not isinstance(obj, dict):
-                        raise ValueError("SMTP 参数必须为 JSON 对象")
-                    server = (obj.get("server") or "").strip()
-                    username = (obj.get("username") or "").strip()
-                    password = obj.get("password") or ""
-                    to_raw = (obj.get("to") or "").strip()
-                    if not server or not username or not password or not to_raw:
-                        raise ValueError("SMTP 参数须包含 server、username、password、to")
-                    try:
-                        int(obj.get("port", 465))
-                    except (TypeError, ValueError):
-                        raise ValueError("SMTP port 必须为整数")
-                except json.JSONDecodeError as e:
-                    raise ValueError(f"SMTP 参数不是合法 JSON: {e}")
-
-        for ch_type, key in (("webhook", "webhook_params"), ("meow", "meow_params")):
+        for ch_type, key in (("webhook", "webhook_params"),):
             for part in (p.strip() for p in (getattr(self, key) or "").split("|") if p.strip()):
                 err = validate_channel_json(ch_type, part)
                 if err:

@@ -43,11 +43,7 @@ ALL_CONFIGURED = dict(
     wechat_webhook_url="https://example.test/wechat",
     dingtalk_webhook_url="https://example.test/dingtalk",
     feishu_webhook_url="https://example.test/feishu",
-    bark_url="https://example.test/bark",
-    pushplus_params='{"token":"t"}',
-    smtp_params='{"server":"smtp.test","username":"u","password":"p","to":"a@b.c"}',
     webhook_params='{"url":"https://example.test/hook"}',
-    meow_params='{"nickname":"me"}',
 )
 
 
@@ -87,7 +83,8 @@ class TestRegistryIntegrity(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)), "渠道 key 不得重复")
         self.assertEqual(
             sorted(keys),
-            ["bark", "dingtalk", "feishu", "meow", "pushplus", "smtp", "webhook", "wechat"],
+            ["dingtalk", "feishu", "webhook", "wechat"],
+            "支持渠道收敛为企业微信/钉钉/飞书/通用 Webhook",
         )
 
     def test_every_param_attr_is_a_real_constructor_param(self):
@@ -133,29 +130,22 @@ class TestDispatch(RegistryCase):
         results, channel_results = n._dispatch_channels(
             MultiPlatformMessage(title="t", content="c"), log_prefix="测试"
         )
-        # 每个已配置渠道都在 channel_results 里出现一次；
-        # 其中 SMTP 走 smtplib，不经过连接池，故 HTTP 请求数少一个。
         self.assertEqual(len(channel_results), len(CHANNEL_SPECS), "每个渠道都应有一条结果")
         urls = self.requested_urls()
         self.assertEqual(
             len(urls),
-            len(CHANNEL_SPECS) - 1,
-            "除 SMTP（走 smtplib）外每个渠道都应发出一次 HTTP 请求",
+            len(CHANNEL_SPECS),
+            "每个已配置渠道都应发出一次 HTTP 请求",
         )
-        # 各渠道最终请求地址与配置值不一定相同（Bark 会拼接 /push，Webhook 从 JSON 提取 url），
+        # 各渠道最终请求地址与配置值不一定相同（Webhook 从 JSON 提取 url），
         # 因此按「可辨识的地址片段」核对，而不是比对原始配置值。
         expected_fragments = {
             "wechat": "example.test/wechat",
             "dingtalk": "example.test/dingtalk",
             "feishu": "example.test/feishu",
-            "bark": "example.test",          # 基址，实际路径由 Bark 侧追加
-            "pushplus": "pushplus.plus",
             "webhook": "example.test/hook",
-            "meow": "chuckfang.com",
         }
         for spec in CHANNEL_SPECS:
-            if spec.key == "smtp":
-                continue
             with self.subTest(channel=spec.key):
                 frag = expected_fragments[spec.key]
                 self.assertTrue(
@@ -166,11 +156,7 @@ class TestDispatch(RegistryCase):
         n = self.make(
             dingtalk_webhook_url="",
             feishu_webhook_url="",
-            bark_url="",
-            pushplus_params="",
-            smtp_params="",
             webhook_params="",
-            meow_params="",
         )
         results, channel_results = n._dispatch_channels(
             MultiPlatformMessage(title="t", content="c"), log_prefix="测试"
@@ -190,46 +176,23 @@ class TestDispatch(RegistryCase):
             "结果顺序应与注册表顺序一致",
         )
 
-    def test_bark_message_used_only_by_bark_channels(self):
-        """Bark/PushPlus 用 Bark 形态消息，其余渠道用通用消息。"""
+    def test_dispatch_passes_same_message_to_all(self):
+        """所有渠道收到同一个通用消息对象（标题都出现在请求 payload 中）。"""
         n = self.make()
         plain = MultiPlatformMessage(title="通用标题", content="通用正文")
-        bark = MultiPlatformMessage(title="Bark标题", content="Bark正文")
-        n._dispatch_channels(plain, log_prefix="测试", bark_message=bark)
+        n._dispatch_channels(plain, log_prefix="测试")
 
-        seen: dict[str, str] = {}
+        self.assertEqual(len(stub_deps.REQUEST_LOG), len(CHANNEL_SPECS))
         for rec in stub_deps.REQUEST_LOG:
-            payload = rec["kwargs"].get("json") or {}
-            body = str(payload)
-            if "Bark标题" in body:
-                seen[rec["url"]] = "bark消息"
-            elif "通用标题" in body:
-                seen[rec["url"]] = "通用消息"
-
-        wechat_url = n.wechat_webhook_url
-        self.assertEqual(seen.get(wechat_url), "通用消息", "企业微信应收到通用消息")
-
-    def test_bark_message_none_falls_back_to_plain(self):
-        """系统通知不传 bark_message：Bark/PushPlus 也应收到通用消息。"""
-        n = self.make(
-            wechat_webhook_url="",
-            dingtalk_webhook_url="",
-            feishu_webhook_url="",
-            webhook_params="",
-            meow_params="",
-            smtp_params="",
-        )
-        msg = MultiPlatformMessage(title="系统标题", content="系统正文")
-        n._dispatch_channels(msg, log_prefix="系统通知")
-        self.assertTrue(stub_deps.REQUEST_LOG, "应至少发出一个请求")
-        for rec in stub_deps.REQUEST_LOG:
-            self.assertIn("系统标题", str(rec["kwargs"].get("json") or {}), "未传 bark_message 时应退化为通用消息")
-
-    def test_needs_bark_message_reflects_config(self):
-        n = self.make(bark_url="", pushplus_params="")
-        self.assertFalse(n._needs_bark_message())
-        n2 = self.make()
-        self.assertTrue(n2._needs_bark_message())
+            kw = rec["kwargs"]
+            payload = kw.get("json_body") or kw.get("json") or kw.get("data") or b""
+            if isinstance(payload, bytes):
+                payload = payload.decode("utf-8", errors="replace")
+            self.assertIn(
+                "通用标题",
+                str(payload),
+                "所有渠道的请求 payload 应携带通用消息标题",
+            )
 
     def test_all_three_entry_points_use_dispatch(self):
         """三个入口（普通/合并/系统通知）都必须经过注册表分发。"""
@@ -271,14 +234,13 @@ class TestEntryPointsDispatchToAllChannels(RegistryCase):
                 n.sent_events.clear()
                 call()
                 urls = self.requested_urls()
-                # smtp 走 smtplib 不出现在 REQUEST_LOG
                 self.assertEqual(
                     len(urls),
-                    len(CHANNEL_SPECS) - 1,
-                    f"{label} 应投递到除 SMTP 外的全部渠道，实际 {len(urls)} 个",
+                    len(CHANNEL_SPECS),
+                    f"{label} 应投递到全部已配置渠道，实际 {len(urls)} 个",
                 )
 
-    def test_merged_disk_event_builds_bark_message(self):
+    def test_merged_disk_event_reaches_all_channels(self):
         n = self.make()
         n.merge_window = 1
         ok, channel_results = n._send_merged_disk_event(

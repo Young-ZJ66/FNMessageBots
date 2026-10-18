@@ -270,7 +270,7 @@
       gap: 4px;
       cursor: pointer; }
 
-[data-page="index"] .add-btn span { font-size: 14px; }
+[data-page="index"] .add-btn span { font-size: 13px; }
 
 [data-page="index"] .add-btn:hover { background: var(--accent-hover); }
 

@@ -392,11 +392,7 @@ class Application:
                 self.config.wechat_webhook_url,
                 self.config.dingtalk_webhook_url,
                 self.config.feishu_webhook_url,
-                self.config.bark_url,
-                self.config.pushplus_params,
-                getattr(self.config, "smtp_params", "") or "",
                 getattr(self.config, "webhook_params", "") or "",
-                getattr(self.config, "meow_params", "") or "",
             ])
             if has_webhook:
                 print("配置加载完成（已配置推送渠道）")
@@ -733,11 +729,7 @@ class Application:
             self.config.wechat_webhook_url,
             self.config.dingtalk_webhook_url,
             self.config.feishu_webhook_url,
-            self.config.bark_url,
-            self.config.pushplus_params,
-            getattr(self.config, "smtp_params", "") or "",
             getattr(self.config, "webhook_params", "") or "",
-            getattr(self.config, "meow_params", "") or "",
         ])
         if self.notifier is None and has_webhook:
             print("配置已保存并热加载：检测到新配置的推送渠道，正在启动监控...")

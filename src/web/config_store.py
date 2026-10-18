@@ -20,11 +20,7 @@ CHANNEL_TYPE_KEYS: Tuple[Tuple[str, str], ...] = (
     ("wechat", "wechat_webhook_url"),
     ("dingtalk", "dingtalk_webhook_url"),
     ("feishu", "feishu_webhook_url"),
-    ("bark", "bark_url"),
-    ("pushplus", "pushplus_params"),
-    ("smtp", "smtp_params"),
     ("webhook", "webhook_params"),
-    ("meow", "meow_params"),
 )
 
 

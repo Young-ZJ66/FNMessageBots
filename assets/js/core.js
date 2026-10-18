@@ -123,5 +123,3 @@ function renderPersistentWarnings(warnings) {
   warningPanel.innerHTML =
     '<div class="warning-panel-title">数据库路径权限告警（保存后检测）</div>' + lines + faq10;
 }
-
-const PUSHPLUS_PLACEHOLDER = '{"token":"你的token","title":"{title}","content":"消息内容","template":"html","channel":"wechat"}';

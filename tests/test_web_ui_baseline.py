@@ -73,7 +73,6 @@ PUBLIC_EXPECTED = {
 
 # 用作「真实密钥」，用于验证打码与回填
 REAL_WECHAT_KEY = "AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHH"
-REAL_SMTP_PASSWORD = "SmtpP@ssw0rd-Sh0uld-Never-Leak"
 
 
 PROBE = r'''
@@ -133,7 +132,6 @@ out["save"] = save
 cfg_file = Path(os.environ["APP_HOME"]) / "config" / "config.json"
 saved = json.loads(cfg_file.read_text(encoding="utf-8"))
 out["saved_wechat"] = saved.get("wechat_webhook_url", "")
-out["saved_smtp"] = saved.get("smtp_params", "")
 
 print("__PROBE__" + json.dumps(out, ensure_ascii=False))
 '''
@@ -148,11 +146,6 @@ def _make_app_home() -> Path:
         "wechat_webhook_url": (
             "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + REAL_WECHAT_KEY
         ),
-        "smtp_params": json.dumps({
-            "server": "smtp.qq.com", "port": 465,
-            "username": "1600386893@qq.com", "password": REAL_SMTP_PASSWORD,
-            "to": "1600386893@qq.com",
-        }),
         "monitor_events": ["LoginSucc"],
     }
     (home / "config" / "config.json").write_text(
@@ -645,7 +638,6 @@ class WebUiBaselineCase(unittest.TestCase):
     def test_config_api_does_not_leak_secrets(self):
         text = self.probe["config_text"]
         self.assertNotIn(REAL_WECHAT_KEY, text, "/api/config 泄漏了企业微信密钥")
-        self.assertNotIn(REAL_SMTP_PASSWORD, text, "/api/config 泄漏了 SMTP 密码")
 
     def test_masked_channels_are_returned(self):
         chans = self.probe["channels_from_api"]
@@ -664,8 +656,6 @@ class WebUiBaselineCase(unittest.TestCase):
         self.assertIn(REAL_WECHAT_KEY, saved,
                       f"企业微信密钥被打码值覆盖了，实际落盘: {saved!r}")
         self.assertNotIn("******", saved)
-        self.assertIn(REAL_SMTP_PASSWORD, self.probe["saved_smtp"],
-                      "SMTP 密码被打码值覆盖了")
 
     # ── 模板上下文 ──
     def test_templates_get_the_variables_they_reference(self):

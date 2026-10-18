@@ -209,11 +209,7 @@ CHANNEL_SPECS: Tuple[ChannelSpec, ...] = (
     ChannelSpec("wechat", "企业微信", "wechat_webhook_url", "_send_to_wechat"),
     ChannelSpec("dingtalk", "钉钉", "dingtalk_webhook_url", "_send_to_dingtalk"),
     ChannelSpec("feishu", "飞书", "feishu_webhook_url", "_send_to_feishu"),
-    ChannelSpec("bark", "Bark", "bark_url", "_send_to_bark", uses_bark_message=True),
-    ChannelSpec("pushplus", "PushPlus", "pushplus_params", "_send_to_pushplus", uses_bark_message=True),
-    ChannelSpec("smtp", "SMTP邮件", "smtp_params", "_send_to_smtp"),
     ChannelSpec("webhook", "通用Webhook", "webhook_params", "_send_to_webhook"),
-    ChannelSpec("meow", "MeoW", "meow_params", "_send_to_meow"),
 )
 
 

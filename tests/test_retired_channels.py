@@ -158,23 +158,24 @@ class TestNotifierRejectsRemovedChannels(RetiredChannelCase):
             MultiPlatformNotifier(magic_push_params="{}")  # type: ignore[call-arg]
         with self.assertRaises(TypeError):
             MultiPlatformNotifier(wecom_app_params="{}")  # type: ignore[call-arg]
+        # 渠道收敛：Bark/PushPlus/SMTP/MeoW 也从签名中移除
+        for gone in ("bark_url", "pushplus_params", "smtp_params", "meow_params"):
+            with self.subTest(channel=gone):
+                with self.assertRaises(TypeError):
+                    MultiPlatformNotifier(**{gone: "x"})  # type: ignore[arg-type]
 
     def test_remaining_channels_construct(self):
         n = MultiPlatformNotifier(
             wechat_webhook_url="https://example.test/w",
             dingtalk_webhook_url="https://example.test/d",
             feishu_webhook_url="https://example.test/f",
-            bark_url="https://example.test/b",
-            pushplus_params='{"token":"t"}',
-            smtp_params='{"server":"s","username":"u","password":"p","to":"a@b.c"}',
             webhook_params='{"url":"https://example.test/h"}',
-            meow_params='{"nickname":"n"}',
         )
         try:
             active = n.get_delivery_health()["active_platforms"]
             self.assertEqual(
                 sorted(active),
-                ["bark", "dingtalk", "feishu", "meow", "pushplus", "smtp", "webhook", "wechat"],
+                ["dingtalk", "feishu", "webhook", "wechat"],
             )
             self.assertNotIn("magic_push", active)
             self.assertNotIn("wecom_app", active)

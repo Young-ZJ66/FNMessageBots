@@ -148,12 +148,7 @@ class UnifiedNotifier:
             wechat_webhook_url=config.wechat_webhook_url,
             dingtalk_webhook_url=config.dingtalk_webhook_url,
             feishu_webhook_url=config.feishu_webhook_url,
-            bark_url=config.bark_url,
-            bark_icon=getattr(config, "bark_icon", "") or "",
-            pushplus_params=config.pushplus_params,
-            smtp_params=getattr(config, "smtp_params", "") or "",
             webhook_params=getattr(config, "webhook_params", "") or "",
-            meow_params=getattr(config, "meow_params", "") or "",
             title_prefix=getattr(config, "title_prefix", TITLE_PREFIX_DEFAULT),
             minimal_push_enabled=bool(getattr(config, "minimal_push_enabled", False)),
             markdown_enabled=bool(getattr(config, "push_markdown_enabled", True)),
@@ -177,12 +172,7 @@ class UnifiedNotifier:
             wechat_webhook_url=self.config.wechat_webhook_url,
             dingtalk_webhook_url=self.config.dingtalk_webhook_url,
             feishu_webhook_url=self.config.feishu_webhook_url,
-            bark_url=self.config.bark_url,
-            bark_icon=getattr(self.config, "bark_icon", "") or "",
-            pushplus_params=self.config.pushplus_params,
-            smtp_params=getattr(self.config, "smtp_params", "") or "",
             webhook_params=getattr(self.config, "webhook_params", "") or "",
-            meow_params=getattr(self.config, "meow_params", "") or "",
             title_prefix=getattr(self.config, "title_prefix", TITLE_PREFIX_DEFAULT),
             minimal_push_enabled=bool(getattr(self.config, "minimal_push_enabled", False)),
             markdown_enabled=bool(getattr(self.config, "push_markdown_enabled", True)),
@@ -766,24 +756,16 @@ class UnifiedNotifier:
             active_platforms.append('dingtalk')
         if self.config.feishu_webhook_url:
             active_platforms.append('feishu')
-        if self.config.bark_url:
-            active_platforms.append('bark')
-        if self.config.pushplus_params:
-            active_platforms.append('pushplus')
-        if getattr(self.config, "smtp_params", ""):
-            active_platforms.append('smtp')
         if getattr(self.config, "webhook_params", ""):
             active_platforms.append('webhook')
-        if getattr(self.config, "meow_params", ""):
-            active_platforms.append('meow')
-        
+
         if len(active_platforms) == 0:
             method = 'none'
         elif len(active_platforms) == 1:
             method = active_platforms[0]
         else:
             method = 'multiple'
-        
+
         return NotificationResult(
             success=success,
             method=method,
@@ -839,24 +821,16 @@ class UnifiedNotifier:
             active_platforms.append('dingtalk')
         if self.config.feishu_webhook_url:
             active_platforms.append('feishu')
-        if self.config.bark_url:
-            active_platforms.append('bark')
-        if self.config.pushplus_params:
-            active_platforms.append('pushplus')
-        if getattr(self.config, "smtp_params", ""):
-            active_platforms.append('smtp')
         if getattr(self.config, "webhook_params", ""):
             active_platforms.append('webhook')
-        if getattr(self.config, "meow_params", ""):
-            active_platforms.append('meow')
-        
+
         if len(active_platforms) == 0:
             method = 'none'
         elif len(active_platforms) == 1:
             method = active_platforms[0]
         else:
             method = 'multiple'
-        
+
         return NotificationResult(
             success=success,
             method=method,

@@ -27,9 +27,6 @@ async function loadConfig() {
 
     channelOptions = data.channel_options || [];
 
-    document.getElementById("input-bark-icon").value =
-      typeof data.bark_icon === "string" ? data.bark_icon : "";
-
     const selected = new Set(data.selected_events || []);
     renderEventCategories(eventsContainer, data.events_by_category || [], selected, document.getElementById("events-anchor-bar"));
     renderEventCategories(thirdPartyEventsContainer, data.third_party_events_by_category || [], selected);
@@ -56,7 +53,6 @@ async function loadConfig() {
     document.getElementById("input-ssh-ignore-loopback").checked = !!data.ssh_ignore_loopback;
     document.getElementById("input-title-prefix").value =
       typeof data.title_prefix === "string" ? data.title_prefix : "飞牛NAS";
-    syncBarkIconInputsFromMaster();
     const dndEnabled = !!data.dnd_enabled;
     document.getElementById("input-dnd-enabled").checked = dndEnabled;
     document.getElementById("input-dnd-start").value = data.dnd_start_time || "22:00";
@@ -128,27 +124,13 @@ saveBtn.addEventListener("click", async () => {
     if (!sel) return;
     const type = sel.value;
     let url = "";
-    if (type === "smtp") {
-      const wrap = tr.querySelector(".smtp-fields");
-      url = serializeSmtpFromInputs(wrap);
-      if (!url) return;
-    } else if (type === "webhook") {
+    if (type === "webhook") {
       url = serializeWebhookFromInputs(tr.querySelector(".webhook-fields"));
-      if (!url) return;
-    } else if (type === "meow") {
-      url = serializeMeowFromInputs(tr.querySelector(".meow-fields"));
-      if (!url) return;
-    } else if (type === "bark") {
-      const inp = tr.querySelector(".bark-channel-fields input.channel-url-input");
-      if (!inp) return;
-      url = inp.value.trim();
       if (!url) return;
     } else {
       const inp = tr.querySelector("input.channel-url-input");
-      const ta = tr.querySelector("textarea");
-      const urlEl = ta || inp;
-      if (!urlEl) return;
-      url = urlEl.value.trim();
+      if (!inp) return;
+      url = inp.value.trim();
       if (!url) return;
     }
     const enableInp = tr.querySelector("input.channel-enabled-input");
@@ -177,7 +159,6 @@ saveBtn.addEventListener("click", async () => {
     dnd_end_time: document.getElementById("input-dnd-end").value || "07:00",
     nas_patrol_enabled: document.getElementById("input-nas-patrol-enabled").checked,
     nas_patrol_cron: (document.getElementById("input-nas-patrol-cron").value || "").trim(),
-    bark_icon: (document.getElementById("input-bark-icon").value || "").trim(),
   };
 
   try {
