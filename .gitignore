@@ -78,3 +78,7 @@ tests/_tmp/
 
 # 前端预览用的本地数据目录（design-previews/serve_preview.py）
 .preview/
+
+# design-previews/ 脚手架已归档到仓库外（E:\Project\fnmb-archive\design-previews），
+# 防止意外重建后再次入库
+design-previews/
