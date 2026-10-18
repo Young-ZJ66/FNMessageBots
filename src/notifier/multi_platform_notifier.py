@@ -303,10 +303,18 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
                     break
     
     def _send_merged_disk_event(
-        self, event_type: str, event_list: List[Dict], time_window: int = 0
+        self, event_type: str, event_list: List[Dict], time_window: int = 0,
+        notify_recorder: bool = True,
     ) -> Tuple[bool, List[Dict[str, Any]]]:
         """发送合并的磁盘事件。event_list 为磁盘信息列表，每项含 disk/model/serial 等字段。
-        返回 (是否至少一渠道成功, 各渠道结果列表)，与 send_notification 一致供推送记录展示。"""
+        返回 (是否至少一渠道成功, 各渠道结果列表)，与 send_notification 一致供推送记录展示。
+
+        notify_recorder：是否通过合并事件回调「补记」推送统计与推送记录。
+        补记是给**不经过 send_notification 调用栈**的调用方用的（合并窗口定时线程、
+        关停时 flush）——它们没有别的地方记账。反之，当调用方本身就是
+        send_notification（event_data 已带 merged_disks 的那一支）时，上层会自己写记录，
+        再补记就会让同一次推送出现两条记录、统计加两次，故那一支传 False。
+        """
         if not event_list:
             return False, []
 
@@ -342,11 +350,17 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
         if results and any(results):
             self._record_send_result(True)
             self.logger.info(f"合并事件发送成功: {event_type}, 数量: {len(event_list)}")
-            self._notify_merged_event_sent(event_type, len(event_list), True, channel_results, event_list)
+            if notify_recorder:
+                self._notify_merged_event_sent(
+                    event_type, len(event_list), True, channel_results, event_list
+                )
             return True, channel_results
         self._record_send_result(False)
         self.logger.warning(f"合并事件发送失败: {event_type}, 数量: {len(event_list)}")
-        self._notify_merged_event_sent(event_type, len(event_list), False, channel_results, event_list)
+        if notify_recorder:
+            self._notify_merged_event_sent(
+                event_type, len(event_list), False, channel_results, event_list
+            )
         return False, channel_results
 
     def _needs_bark_message(self) -> bool:
@@ -418,7 +432,11 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
         if event_type in ['DiskWakeup', 'DiskSpindown']:
             merged_disks = event_data.get('merged_disks') if isinstance(event_data.get('merged_disks'), list) else None
             if merged_disks:
-                success, crs = self._send_merged_disk_event(event_type, merged_disks, 0)
+                # notify_recorder=False：本支就在 send_notification 调用栈内，
+                # 上层（UnifiedNotifier）会依据返回的真实结果自己写记录与统计。
+                success, crs = self._send_merged_disk_event(
+                    event_type, merged_disks, 0, notify_recorder=False
+                )
                 return success, crs
             return self._handle_disk_event(event_type, event_data, raw_log, timestamp)
         

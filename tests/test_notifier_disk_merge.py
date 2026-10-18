@@ -261,6 +261,49 @@ class TestUnifiedNotifierRecording(unittest.TestCase):
         self.assertNotIn("full_event_data", items[0], "整条原始事件不入库")
         notifier.close()
 
+    def test_merged_disks_via_send_notification_records_once(self):
+        """一条磁盘合并事件经 send_notification 投递时，只能记账一次。
+
+        event_data 已带 merged_disks 时，MultiPlatformNotifier.send_notification 会直接调
+        _send_merged_disk_event 发送并返回**真实结果**（不是 deferred 标记）；而
+        _send_merged_disk_event 内部还会通过回调「补记」——那个补记本来是给
+        **不经过 send_notification 调用栈**的定时线程用的。
+        两者叠加会让同一次推送写两条记录、统计加两次。
+        """
+        from notifier.unified_notifier import UnifiedNotifier
+
+        cfg = self._config()
+        cfg.wechat_webhook_url = "http://example.test/hook"  # 需要至少一个渠道才会真的投递
+        notifier = UnifiedNotifier(cfg)
+        self.push_history.clear_all()
+        before = self.push_stats.get_total()
+
+        disks = [
+            {"disk": "/dev/sda", "model": "WD40EFZX", "serial": "SN1"},
+            {"disk": "/dev/sdb", "model": "WD40EFZX", "serial": "SN2"},
+        ]
+        notifier.send_notification(
+            "DiskWakeup", {"merged_disks": disks, "count": len(disks)}, "raw", "2026-10-18 00:00:00"
+        )
+        notifier.close()
+
+        counts = self.push_history.get_total_counts()
+        self.assertEqual(counts["total"], 1, "一次合并推送只应写一条推送记录")
+        after = self.push_stats.get_total()
+        self.assertEqual(after["success"], before["success"] + 1, "推送统计只应 +1")
+        self.assertEqual(after["total"], before["total"] + 1, "总推送只应 +1")
+
+        # 保留的必须是「普通记录」那条：摘要为实际推送文案、detail 里带逐盘明细，
+        # 前端要靠 event_data.merged_disks 渲染盘列表表格。
+        # 被丢弃的是补记那条（摘要「磁盘事件合并推送 … × N」，只有条数没有内容）。
+        import json as _json
+
+        rec = self.push_history.get_records(limit=1)[0]
+        self.assertEqual(rec["event_type"], "DiskWakeup")
+        self.assertNotIn("合并推送", rec["summary"], "留下的应是内容摘要，不是「× N」补记")
+        detail = _json.loads(rec["detail"])
+        self.assertEqual(len(detail["event_data"]["merged_disks"]), 2, "逐盘明细必须留在记录里")
+
     def test_merged_send_failure_is_recorded_as_failure(self):
         from notifier.unified_notifier import UnifiedNotifier
 
