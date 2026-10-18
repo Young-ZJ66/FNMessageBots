@@ -22,21 +22,24 @@
 以下为 `monitor_events` 中允许配置的 `eventId`（与数据库一致；旧配置里已移除的类型会在启动时被过滤）：
 
 - **登录**：`LoginSucc`, `LoginSucc2FA1`, `LoginFail`, `Logout`
-- **硬盘**：`FoundDisk`, `DiskWakeup`, `DiskSpindown`, `DISK_IO_ERR`
+- **硬盘**：`FoundDisk`, `InsertDisk`, `EjectDisk`, `StorageBroken`, `STORAGE_DEGRADED`, `DiskWakeup`, `DiskSpindown`, `DISK_IO_ERR`
 - **应用**：`APP_CRASH`, `APP_UPDATE_FAILED`, `APP_START_FAILED_LOCAL_APP_RUN_EXCEPTION`, `APP_AUTO_START_FAILED_DOCKER_NOT_AVAILABLE`, `APP_STARTED`, `APP_STOPPED`, `APP_UPDATED`, `APP_INSTALLED`, `APP_AUTO_STARTED`, `APP_UNINSTALLED`
-- **系统**：`CPU_USAGE_ALARM`, `CPU_USAGE_RESTORED`, `CPU_TEMPERATURE_ALARM`
+- **系统**：`CPU_USAGE_ALARM`, `CPU_USAGE_RESTORED`, `CPU_TEMPERATURE_ALARM`, `MEMORY_USAGE_ALARM`, `MEMORY_USAGE_RESTORED`
 - **UPS**：`UPS_ONBATT`, `UPS_ONBATT_LOWBATT`, `UPS_ONLINE`, `UPS_ENABLE`, `UPS_DISABLE`
-- **SSH**：`SSH_INVALID_USER`, `SSH_AUTH_FAILED`, `SSH_LOGIN_SUCCESS`, `SSH_DISCONNECTED`（优先从宿主机 `journalctl -u ssh/sshd` 采集；需挂载 `/var/log/journal` 与 `/etc/machine-id`）
+- **SSH**：`SSH_INVALID_USER`, `SSH_AUTH_FAILED`, `SSH_LOGIN_SUCCESS`, `SSH_DISCONNECTED`（优先从宿主机 `journalctl -u ssh/sshd` 采集；需按宿主机实际存在的目录挂载 `/var/log/journal` 或 `/run/log/journal`，并挂载 `/etc/machine-id`）
 - **文件与共享**：`ARCHIVING_SUCCESS`, `DeleteFile`, `MovetoTrashbin`, `SHARE_EVENTID_DEL`, `SHARE_EVENTID_PUT`
 - **服务开关**：`WEBDAV_ENABLED` / `WEBDAV_DISABLED`, `SAMBA_ENABLED` / `SAMBA_DISABLED`, `DLNA_ENABLED` / `DLNA_DISABLED`, `FTP_ENABLED` / `FTP_DISABLED`, `NFS_ENABLED` / `NFS_DISABLED`
 - **防火墙与安全**：`FW_ENABLE`, `FW_DISABLE`, `SECURITY_PORTCHANGED`
-- **虚拟机**：`SHUTDOWN_VM`, `STATUS_RUNNING_VM`, `DESTROY_VM`
-- **影视库**：`TRIM_RESOURCE_ADDED`, `TRIM_SCRAPE_SUCCESS`, `TRIM_RESOURCE_DELETED`（读 `trimmedia.db`；删除事件来自 `media_delete` 表，表不存在时该类事件静默不推送）
+- **虚拟机**：`SHUTDOWN_VM`, `STATUS_RUNNING_VM`, `DESTROY_VM` 及其他名称含 `VM` 的动态事件（logger 中出现即允许配置）
+- **备份任务**：`BACKUP_TASK_SUCCESS`, `BACKUP_TASK_FAILED`, `BACKUP_TASK_PARTIAL_SUCCESS`（读 `basic_backup.db3`）
+- **影视库**：`TRIM_RESOURCE_ADDED`, `TRIM_SCRAPE_SUCCESS`, `TRIM_RESOURCE_DELETED`, `MEDIA_LOGIN_SUCC`, `MEDIA_LOGOUT`, `MEDIA_USER_CREATED`（读 `trimmedia.db` / `trimactivity.db`；删除事件来自 `media_delete` 表，表不存在时该类事件静默不推送）
 - **相册**：`PHOTO_SHARE_CREATED`, `PHOTO_SHARE_EXPIRED`, `PHOTO_DEVICE_REGISTERED`, `FACE_RECOGNITION_UPDATED`（读 `photo.db`）
 - **任务计划**：`SCHEDULER_TASK_SUCCESS`, `SCHEDULER_TASK_FAILED`, `SCHEDULER_TASK_CONDITION_FAILED`（读 `scheduler.db`）
 - **Docker 容器**：`DOCKER_CONTAINER_CREATE/START/STOP/DIE/OOM/KILL/PAUSE/UNPAUSE/RESTART/DESTROY`（需挂载 `docker.sock`，等同授予 Docker API 访问能力）
 - **外网 IP**：`WAN_IP_CHANGED`
 - **定时巡检**：`NAS_PATROL_REPORT`（Cron 调度，独立于日志事件勾选）
+
+> `NAS_PATROL_REPORT` 为内部事件类型，不在 `monitor_events` 白名单内，通过「巡检任务」开关启用。
 
 ## 日志存储
 
@@ -94,7 +97,7 @@ python tools/log_manager.py cleanup 30
 
 | 渠道 | 消息形态 | 各平台限制与说明 |
 | --- | --- | --- |
-| 企业微信（群机器人） | `markdown`（`push_markdown_enabled` 关闭时为 `text`） | `content` **最长 4096 字节**、必须 UTF-8；群机器人 markdown 不支持缩进对齐，故正文按行渲染为列表项；超长按字节截断并标注 |
+| 企业微信（群机器人） | `markdown`（`push_markdown_enabled` 关闭时为 `text`） | `content` **最长 4096 字节**、必须 UTF-8；群机器人 markdown 不支持列表语法（`- ` 会原样显示），明细直接按行渲染并支持 `##` 标题；超长按字节截断并标注 |
 | 钉钉（自定义机器人） | `markdown` | `text` **最大 5000 字符**；`title` 另有独立上限（首屏会话透出内容），故预留标题长度后按字符截断；关键词/加签安全设置仍按原配置生效，关键词需出现在消息文本中 |
 | 飞书（自定义机器人） | `post` 富文本 | `content.post.zh_cn.{title, content:[[{tag:"text", text}]]}`；**请求体不超过 20KB**，超长按字节截断；不支持时回退 `text` |
 | Bark | `title` + `body` 纯文本 | Bark 的 markdown 支持是**较新版本的可选字段**，为不破坏既有推送保持纯文本 |
@@ -134,8 +137,9 @@ python tools/log_manager.py cleanup 30
 - `LOG_LEVEL`、`HTTP_POOL_SIZE`、`HTTP_RETRY_COUNT`、`HTTP_TIMEOUT`、`DEDUP_WINDOW`
 - `LOG_RETENTION_DAYS`、`MAX_LOG_AGE`
 - `PUSH_MARKDOWN_ENABLED`：结构化消息开关（`1`/`true` 开启）
-- `MEDIA_BATCH_SUMMARY_ENABLED`：影视/相册事件聚合推送（默认开启）
+- `MEDIA_BATCH_SUMMARY_ENABLED`：高频同类事件聚合推送（默认开启）
 - `MEDIA_BATCH_WINDOW`：聚合静默窗口（秒，默认 90）
+- `MINIMAL_PUSH_ENABLED`：极简推送（一行文案）
 - `DISPLAY_TIMEZONE`：通知与记录的时间显示时区（默认 `Asia/Shanghai`；各数据源统一按此时区展示）
 - `UI_PORT`：Web 端口（默认 `18080`）；`UI_HOST`：监听地址（默认 `0.0.0.0`，仅本机访问可设 `127.0.0.1`）
 - `FNMB_WEB_PASSWORD`：未设密码时作为初始 Web 密码（至少 8 位）
@@ -234,19 +238,22 @@ PYTHONPATH=. LOGGER_DB_PATH=./logger_data.db3 WECHAT_WEBHOOK_URL=xxx python3 src
 
 ```
 ├── src/
-│   ├── monitor/          # 数据库轮询、事件处理、schema 自检、模型
-│   ├── notifier/         # 多平台通知、渠道注册表、连接池
-│   ├── utils/            # 日志、存储、去重缓存、健康检查、推送统计
-│   ├── web/              # Web 配置 UI（Flask）
+│   ├── monitor/          # 数据库轮询、事件处理、schema 自检、巡检、外网 IP 监控
+│   ├── notifier/         # 多平台通知（消息格式/文案表/内容构建/渠道发送分层）、连接池
+│   ├── utils/            # 日志、存储、去重缓存、健康检查、推送统计与记录
+│   ├── web/              # Web 配置 UI（Flask；模板与 assets/ 下外置 CSS/JS）
 │   ├── config.py
+│   ├── version.py        # 版本号单一来源
 │   └── main.py
+├── assets/               # 前端静态资源（css/js/fonts/icons）
 ├── config/config.json    # 配置文件（可挂载，Web 可写）
 ├── data/logs             # 运行日志与推送存储（运行时生成）
-├── data/cursor           # 轮询游标等（运行时生成）
+├── data/cursor           # 轮询游标、推送记录库（运行时生成）
 ├── tests/                # 回归测试（纯标准库，不联网、不需要第三方依赖）
-├── tools/log_manager.py  # 推送日志查看/清理/导出
+├── tools/                # 运维脚本（随镜像分发，docker exec 可用）
+│   ├── log_manager.py                    # 推送日志查看/清理
+│   └── dedupe_disk_merge_records.py      # 磁盘合并推送历史重复记录清理
 ├── docs/                 # 文档（notification-channels 与各推送渠道子页）
-├── assets/icons/         # 应用图标
 ├── .github/workflows/
 │   └── build-image.yml   # 在 GitHub 上构建并推送镜像（GHCR）
 ├── Dockerfile
@@ -281,4 +288,4 @@ PYTHONPATH=. LOGGER_DB_PATH=./logger_data.db3 WECHAT_WEBHOOK_URL=xxx python3 src
 
 ## 许可证
 
-本项目基于 [Sunanang/FNMessageBots](https://github.com/Sunanang/FNMessageBots) fork 而来，本仓库的修改同样以 [MIT License](https://opensource.org/licenses/MIT) 发布，许可证全文见仓库根目录 [`LICENSE`](LICENSE)。
+本项目基于 [Sunanang/FNMessageBots](https://github.com/Sunanang/FNMessageBots) fork 而来，本仓库的修改同样以 [MIT License](https://opensource.org/licenses/MIT) 发布，许可证全文见仓库根目录 [`LICENSE`](LICENSE)。按 MIT 要求，`LICENSE` 中的原始版权声明与许可声明不得移除。
