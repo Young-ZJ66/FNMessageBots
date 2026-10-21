@@ -1,38 +1,16 @@
 """
-巡检子包共享基座：原始 import 集、常量、巡检状态文件读写。
+巡检子包共享基座：常量、巡检状态文件读写。
 
-probes/ups/disks/report 各子模块从此处 `from ._consts import ...` 取所需名称；
-`.sqlite_uri` 与 `utils.logtime_display` 的导入保留在此并 re-export，
-子模块通过 `from ._consts import ...` 引用，保持相对路径一致。
+probes/ups/disks/report 各子模块从这里 `from ._consts import ...` 取常量与状态函数；
+各子模块自带各自所需的 stdlib import，此处只保留本文件用到的。
 """
 
 from __future__ import annotations
 
-import glob
 import json
 import logging
-import os
-import re
-import stat as stat_mod
-import socket
-import sqlite3
-import subprocess
-import threading
-import time
-import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-import ipaddress
-import ssl
-import urllib.parse
-
-try:
-    import psutil
-except ImportError:
-    psutil = None  # type: ignore
-
-from ..sqlite_uri import connect_readonly_with_fallback  # noqa: F401
-from utils.logtime_display import format_ts_for_display, now_for_display  # noqa: F401
+from typing import Any, Dict, Tuple
 
 _STATE_FILENAME = "nas_patrol_state.json"
 

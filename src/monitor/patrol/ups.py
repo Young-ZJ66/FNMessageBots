@@ -2,30 +2,11 @@
 
 from __future__ import annotations
 
-import glob
-import json
-import logging
 import os
 import re
-import stat as stat_mod
-import socket
-import sqlite3
-import subprocess
-import threading
-import time
-import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-import ipaddress
-import ssl
-import urllib.parse
+from typing import Any, Dict, List, Optional, Set
 
-try:
-    import psutil
-except ImportError:
-    psutil = None  # type: ignore
-
-from utils.logtime_display import format_ts_for_display, now_for_display
 from ._consts import (
     _NUT_UPSD_DEFAULT_PORT,
     _NUT_UPS_CONF_MOUNT_PATH,
@@ -33,7 +14,6 @@ from ._consts import (
 from .probes import (
     _default_ipv4_gateway,
     _resolve_cmd,
-    _run_cmd,
     _run_upsc_cmd,
     _upsc_is_plausible_device_name,
     _upsc_kv_has_ups_vars,

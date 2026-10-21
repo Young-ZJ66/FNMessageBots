@@ -2,37 +2,27 @@
 
 from __future__ import annotations
 
-import glob
 import json
-import logging
 import os
 import re
-import stat as stat_mod
+import shutil
 import socket
 import sqlite3
-import subprocess
-import threading
-import time
-import shutil
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-import ipaddress
 import ssl
+import subprocess
+import time
 import urllib.parse
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import ipaddress
 
 try:
     import psutil
 except ImportError:
     psutil = None  # type: ignore
 
-from utils.logtime_display import format_ts_for_display, now_for_display
-from ._consts import (
-    _load_state,
-    _normalize_patrol_state,
-    _save_state,
-    _state_path,
-    connect_readonly_with_fallback,
-)
+from utils.logtime_display import format_ts_for_display
+from ..sqlite_uri import connect_readonly_with_fallback
 
 
 

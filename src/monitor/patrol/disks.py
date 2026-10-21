@@ -4,28 +4,18 @@ from __future__ import annotations
 
 import glob
 import json
-import logging
 import os
 import re
 import stat as stat_mod
-import socket
-import sqlite3
 import subprocess
-import threading
-import time
-import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
-import ipaddress
-import ssl
-import urllib.parse
 
 try:
     import psutil
 except ImportError:
     psutil = None  # type: ignore
 
-from utils.logtime_display import format_ts_for_display, now_for_display
 from ._consts import (
     _PATROL_CONTAINER_APP_MOUNT_PREFIXES,
     _PATROL_CONTAINER_FILE_BIND_MOUNTS,
