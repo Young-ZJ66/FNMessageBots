@@ -2,3 +2,5 @@
 fpk/cmd/* text eol=lf
 fpk/wizard/* text eol=lf
 fpk/manifest text eol=lf
+requirements.txt text eol=lf
+fpk/cmd/fnmessagebots/requirements.txt text eol=lf
