@@ -7,6 +7,9 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+
+# fnpack 打包工具二进制（本地下载，不入库）
+.fnpack/
 downloads/
 eggs/
 .eggs/

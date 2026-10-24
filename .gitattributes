@@ -1,0 +1,4 @@
+# FPK 的 bash 脚本必须保持 LF 行尾：CRLF 会导致 NAS 上 bad interpreter
+fpk/cmd/* text eol=lf
+fpk/wizard/* text eol=lf
+fpk/manifest text eol=lf

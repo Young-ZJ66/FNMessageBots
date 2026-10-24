@@ -1,0 +1,13 @@
+appname               = FnMessageBot
+version               = 2.7.0
+display_name          = 日志推送
+desc                  = 飞牛日志监控机器人：轮询 NAS 事件日志并推送通知。支持企业微信、钉钉、飞书、通用 Webhook 四种渠道，结构化消息排版，高频事件聚合推送，内置 Web 配置页与定时巡检。<br /> 源码与文档见 <a href="https://github.com/Young-ZJ66/FNMessageBots" target="_blank">GitHub</a>
+changelog             = 应用更新日志<br />1.推送渠道收敛为企业微信、钉钉、飞书、通用 Webhook。<br />2.推送消息分层排版（标题/概要/引用块明细）。<br />3.影视入库等高频事件聚合推送。<br />4.Web 配置页重构（侧栏分页签、推送记录详情）。<br />5.移除推送文案 emoji。<br />6.修复 SSH journal 误判与磁盘合并推送重复记录。<br />
+platform              = all
+os_min_version        = 1.1.3100
+source                = thirdparty
+maintainer            = YoungZJ
+distributor           = YoungZJ
+desktop_uidir         = ui
+desktop_applaunchname = FnMessageBot.Application
+checkport             = false
