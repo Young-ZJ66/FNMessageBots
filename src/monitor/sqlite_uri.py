@@ -63,7 +63,10 @@ def connect_readonly_with_fallback(
         conn: Optional[sqlite3.Connection] = None
         try:
             conn = sqlite3.connect(make_uri(db_path), uri=True, timeout=timeout)
-            conn.execute("SELECT 1").fetchone()
+            # 常量查询不读取数据库页；部分 SQLite 会把损坏文件也判为可连接。
+            # 改读 sqlite_master（固定字面量 SQL，非拼接）才能真正验证文件可解析。
+            # 采纳自上游 Sunanang/FNMessageBots a8637c5。
+            conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
             if table_probe_sql:
                 conn.execute(table_probe_sql).fetchone()
             return conn
@@ -81,14 +84,22 @@ def connect_readonly_with_fallback(
     raise sqlite3.Error("sqlite connect failed")
 
 
+_PROBE_DEFAULT_SQL = "SELECT name FROM sqlite_master LIMIT 1"
+
+
 def probe_readonly_sqlite(
     db_path: str,
-    sql: str = "SELECT 1",
+    sql: str = _PROBE_DEFAULT_SQL,
     timeout: float = 5.0,
     *,
     table_probe_sql: Optional[str] = None,
 ) -> None:
-    """连接并执行只读探测 SQL；与 connect_readonly_with_fallback 使用相同 URI 策略。"""
+    """连接并执行只读探测 SQL；与 connect_readonly_with_fallback 使用相同 URI 策略。
+
+    默认探测语句为模块级常量 _PROBE_DEFAULT_SQL（读 sqlite_master 验证文件
+    可解析），非 SELECT 1——后者不读库页，损坏文件也判为可连接（上游 a8637c5
+    的教训）。调用方传入的 sql 同样必须是固定字面量，不接受外部输入。
+    """
     conn = connect_readonly_with_fallback(
         db_path,
         timeout=timeout,
