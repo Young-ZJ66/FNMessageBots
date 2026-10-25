@@ -64,12 +64,17 @@ ANON_EXPECTED = {
     "/history": 302,
 }
 
-# 公开路径 → 期望 200
+# 公开路径 → 匿名 GET 期望状态（POST-only 的认证端点匿名 GET 得 405）
 PUBLIC_EXPECTED = {
     "/": 200,
+    "/api/auth/login": 405,
+    "/api/auth/logout": 405,
+    "/api/auth/set-password": 405,
     "/api/auth/status": 200,
+    "/favicon.ico": 200,
     "/healthz": 200,
     "/robots.txt": 200,
+    "/session-guard.js": 200,
 }
 
 # 用作「真实密钥」，用于验证打码与回填
@@ -343,6 +348,8 @@ class TemplateStaticCase(unittest.TestCase):
         """
         missing: List[str] = []
         absolute: List[str] = []
+        # 路由直出的脚本（如 session-guard.js）不在仓库静态树里
+        route_served = {"session-guard.js"}
         for name, html in self.templates().items():
             refs = re.findall(r'<script[^>]+src="([^"]+)"', html)
             refs += re.findall(r'<link[^>]+href="([^"]+)"', html)
@@ -351,6 +358,8 @@ class TemplateStaticCase(unittest.TestCase):
                     continue
                 if ref.startswith("/"):
                     absolute.append(f"{name}: {ref}")
+                    continue
+                if ref.split("?")[0] in route_served:
                     continue
                 if not (_ROOT / ref.split("?")[0]).is_file():
                     missing.append(f"{name}: {ref}")
@@ -395,7 +404,7 @@ class TemplateStaticCase(unittest.TestCase):
                 ref = m.group(1).split("?")[0].strip()
                 if not ref or ref.startswith("/") or not filelike.search(ref):
                     continue
-                for base in (_SRC / "web", _ROOT, _SRC):
+                for base in (_SRC / "web", _SRC / "web" / "static", _ROOT, _SRC):
                     if (base / ref).exists():
                         break
                 else:

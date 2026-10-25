@@ -85,7 +85,8 @@ def fetch_platform_config(timeout: float = 3.0) -> Optional[Dict[str, Any]]:
         obj = json.loads(raw) if raw else {}
         if not isinstance(obj, dict):
             return None
-        if int(obj.get("code", -1) or -1) != 0:
+        # 数字 0 是成功码：不能用 `or -1` 兜底（0 or -1 → -1 会把成功当失败）
+        if str(obj.get("code")).strip() != "0":
             logger.debug(
                 "getPlatformConfig business code=%s msg=%s",
                 obj.get("code"),

@@ -267,7 +267,9 @@ class TrimActivityPoller:
                     "update_time": int(update_time or 0),
                 }
         except Exception as e:
-            self.logger.warning("构建 trimactivity token 快照失败: %s", e)
+            # 快照失败保持未初始化，下一轮重试对齐（半截基线会让后续推送状态失真）
+            self.logger.warning("构建 trimactivity token 快照失败，保持未对齐待重试: %s", e)
+            return
         state["token_status"] = token_status
         state["initialized"] = True
         self.logger.info(

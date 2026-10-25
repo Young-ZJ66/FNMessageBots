@@ -29,6 +29,8 @@ services:
       - /var/lib/dpkg/status:/host/dpkg/status:ro
       # 宿主主机名（巡检读取 /host/etc/hostname，避免显示容器 ID）
       - /etc/hostname:/host/etc/hostname:ro
+      # 宿主系统版本（巡检读取 /host/etc/os-release；容器内不能把镜像的 Debian 当系统版本）
+      - /etc/os-release:/host/etc/os-release:ro
       # SSH 登录：读宿主机 journal（飞牛新版本 logger_data 常无 Sshd*）
       - /var/log/journal:/var/log/journal:ro
       - /run/log/journal:/run/log/journal:ro

@@ -328,6 +328,10 @@ class SshJournalPoller:
             attempts.append((args, out, err))
 
         state["aligned"] = True
+        # 空 journal 拿不到游标：固定起始时间，后续轮询接收此后首条新日志。
+        # 否则「重启后第一条 SSH 事件」会因为拿不到 --after-cursor 而永久丢失。
+        state["cursor"] = ""
+        state["since"] = f"@{time.time():.6f}"
         self._save_state(state)
         if not self._align_warned:
             self._align_warned = True
@@ -337,27 +341,27 @@ class SshJournalPoller:
                 for a, o, e in attempts
             )
             self.logger.warning(
-                "SSH journal 取不到游标，**SSH 事件将不会推送**。%s 本次实际输出：%s",
+                "SSH journal 暂无游标（journal 可能为空或不可见），已改用时间起点等待新日志。"
+                "%s 本次实际输出：%s",
                 JOURNAL_MOUNT_HINT,
                 detail,
             )
 
-    def _fetch_entries(self, cursor: str) -> Tuple[List[Dict[str, Any]], str]:
+    def _fetch_entries(self, cursor: str, since: str = "") -> Tuple[List[Dict[str, Any]], str]:
         """返回 (entries, new_cursor)。entries 为 journal -o json 对象列表。
 
         必须带 ``__CURSOR``（不是 CURSOR），否则游标不前进会每轮重复推送。
-        无游标时不回退 ``-n 50``，避免把历史当增量刷屏。
+        无游标时使用固定起始时间，避免遗漏首条事件或把历史当增量刷屏。
         """
-        if not cursor:
+        if not cursor and not since:
             return [], cursor
         extra = [
             "-o",
             "json",
             "--output-fields=MESSAGE,__CURSOR,__REALTIME_TIMESTAMP",
-            "--after-cursor",
-            cursor,
             "--show-cursor",
         ]
+        extra.extend(["--after-cursor", cursor] if cursor else ["--since", since])
         code, out, err = self._run_journalctl(extra)
         if code != 0:
             self.logger.warning("读取 SSH journal 失败: %s", (err or out)[:240])
@@ -474,13 +478,13 @@ class SshJournalPoller:
             self._align_cursor(state)
             return
         cursor = str(state.get("cursor") or "")
-        if not cursor:
-            # 对齐时未拿到 cursor：再试一次，绝不无游标扫历史
-            self._align_cursor(state)
-            cursor = str(state.get("cursor") or "")
-            if not cursor:
-                return
-        entries, new_cursor = self._fetch_entries(cursor)
+        since = str(state.get("since") or "")
+        if not cursor and not since:
+            # 兼容旧版保存的空游标状态；时间只记录一次，空闲轮询不再重新对齐。
+            state["since"] = f"@{time.time():.6f}"
+            self._save_state(state)
+            since = str(state.get("since") or "")
+        entries, new_cursor = self._fetch_entries(cursor, since)
         for obj in entries:
             msg = obj.get("MESSAGE")
             if isinstance(msg, list):
@@ -492,12 +496,15 @@ class SshJournalPoller:
             event_type, event_data = parsed
             self._emit(event_type, event_data, msg, self._ts_from_entry(obj))
         if new_cursor and new_cursor != cursor:
+            # 拿到新游标后不再需要时间起点
             state["cursor"] = new_cursor
+            state.pop("since", None)
             self._save_state(state)
 
     def _run_loop(self) -> None:
         state = self._load_state()
-        if not state.get("aligned") or not state.get("cursor"):
+        if not state.get("aligned"):
+            # since 模式（cursor 为空但有时间起点）也算已对齐，不再重跑
             self._align_cursor(state)
         self.logger.info(
             "SSH journal 轮询启动 units=%s interval=%ss",

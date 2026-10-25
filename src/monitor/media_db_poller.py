@@ -254,7 +254,9 @@ class MediaDBPoller:
                     except (TypeError, ValueError):
                         fb[str(g)] = 0
         except Exception as e:
-            self.logger.warning("构建 fetch 快照失败: %s", e)
+            # 快照失败保持未初始化，下一轮重试对齐（半截基线会让后续推送状态失真）
+            self.logger.warning("构建 fetch 快照失败，保持未对齐待重试: %s", e)
+            return
         state["fetch_by_guid"] = fb
         state["initialized"] = True
         self.logger.info(

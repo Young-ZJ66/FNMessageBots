@@ -423,24 +423,9 @@ def _smart_health_for_block_path(block_path: str) -> str:
         low = out.lower()
         if extra and "test result" in low:
             SAT_FALLBACK_USED = True
-        if "test result: passed" in low or "smart overall-health self-assessment test result: passed" in low:
-            return "健康"
-        fail_markers = (
-            "test result: failed",
-            "overall-health self-assessment test result: failed",
-            "smart overall-health self-assessment test result: failed",
-            "prefail",
-        )
-        if any(k in low for k in fail_markers):
-            return "异常"
-        m = re.search(r"critical_warning\s*[:=]\s*(0x[0-9a-fA-F]+|\d+)", out)
-        if m:
-            raw = m.group(1).strip().lower()
-            try:
-                val = int(raw, 16) if raw.startswith("0x") else int(raw)
-                return "健康" if val == 0 else "异常"
-            except Exception:
-                pass
+        health = _parse_smart_health_output(out)
+        if health != "--":
+            return health
 
     if "nvme" in nb.lower():
         out_nvme_json = _run_cmd(["nvme", "smart-log", "-o", "json", bp], timeout=2.5)
@@ -479,15 +464,33 @@ def _smart_health_for_block_path(block_path: str) -> str:
             except Exception:
                 continue
 
-    sys_key = nb if _valid_sysfs_block_token(nb) else ""
-    if sys_key:
-        sys_state = Path(f"/sys/block/{sys_key}/device/state")
-        try:
-            s = sys_state.read_text(encoding="utf-8", errors="ignore").strip().lower()
-            if s in {"running", "active", "live"}:
-                return "健康"
-        except Exception:
-            pass
+    return "--"
+
+
+def _parse_smart_health_output(out: str) -> str:
+    """解析 smartctl 健康输出：JSON（smart_status.passed / nvme critical_warning）、
+    ATA 文本（test result）、SCSI 文本（SMART Health Status: OK/FAILED）。"""
+    try:
+        obj = json.loads(out)
+        if isinstance(obj, dict):
+            passed = (obj.get("smart_status") or {}).get("passed")
+            if isinstance(passed, bool):
+                return "健康" if passed else "异常"
+            warning = (obj.get("nvme_smart_health_information_log") or {}).get("critical_warning")
+            if warning is not None:
+                value = int(warning, 0) if isinstance(warning, str) else int(warning)
+                return "健康" if value == 0 else "异常"
+    except (ValueError, TypeError, AttributeError):
+        pass
+    low = (out or "").lower()
+    if re.search(r"(?:test result:\s*passed\b|smart health status:\s*ok\b)", low):
+        return "健康"
+    if re.search(r"(?:test result:\s*failed\b|smart health status:\s*(?:failed|bad)\b)", low):
+        return "异常"
+    match = re.search(r"critical_warning\s*[:=]\s*(0x[0-9a-f]+|\d+)", low)
+    if match:
+        raw = match.group(1)
+        return "健康" if int(raw, 16 if raw.startswith("0x") else 10) == 0 else "异常"
     return "--"
 
 
@@ -499,18 +502,6 @@ def _smart_health_for_disk(dev_base: str) -> str:
     if not _valid_sysfs_block_token(dev_base):
         return "--"
     return _smart_health_for_block_path(f"/dev/{dev_base}")
-
-
-def _patrol_sysfs_disk_running(dev_base: str) -> bool:
-    """内核块设备 ``running/active/live`` 视为在线可用（无 smartctl 时的弱信号）。"""
-    db = str(dev_base or "").strip()
-    if not db or not _valid_sysfs_block_token(db):
-        return False
-    try:
-        s = Path(f"/sys/block/{db}/device/state").read_text(encoding="utf-8", errors="ignore").strip().lower()
-        return s in {"running", "active", "live"}
-    except OSError:
-        return False
 
 
 def _smart_health_for_patrol_partition(dev_path: str, physical: str) -> str:
@@ -644,6 +635,8 @@ def _parse_celsius_from_smartctl_text(out: str) -> str:
     """文本解析：先主 Temperature:，再 Sensor 1；忽略 Sensor 2+；ATA 用 RAW。"""
     main_temp: Optional[str] = None
     sensor1: Optional[str] = None
+    ata194: Optional[str] = None
+    ata190: Optional[str] = None
 
     for line in (out or "").splitlines():
         low = line.lower().strip()
@@ -685,19 +678,18 @@ def _parse_celsius_from_smartctl_text(out: str) -> str:
                     pass
             continue
 
-        # ATA 194 / 190：取「-」后的 RAW，避免把 VALUE/THRESH 当温度
+        # ATA 194 / 190：RAW 是第十列；WHEN_FAILED 可能是 In_the_past，不能只匹配 "-"。
         if "temperature_celsius" in low or re.match(r"^190\s+", low) or re.match(r"^194\s+", low):
-            # 优先 194 行；190 仅作后备（下面用 found 顺序控制）
-            m = re.search(r"-\s+(\d+)\s*(?:\(|$)", line)
+            fields = line.split(None, 9)
+            m = re.match(r"(-?\d+)(?:\s|\(|$)", fields[9]) if len(fields) == 10 else None
             if m:
                 try:
                     v = int(m.group(1))
                     if _celsius_ok(v):
                         if "temperature_celsius" in low or re.match(r"^194\s+", low):
-                            if main_temp is None:
-                                main_temp = _fmt_celsius(v)
-                        elif sensor1 is None:
-                            sensor1 = _fmt_celsius(v)
+                            ata194 = _fmt_celsius(v)
+                        else:
+                            ata190 = _fmt_celsius(v)
                 except (TypeError, ValueError):
                     pass
             continue
@@ -706,6 +698,10 @@ def _parse_celsius_from_smartctl_text(out: str) -> str:
         return main_temp
     if sensor1:
         return sensor1
+    if ata194:
+        return ata194
+    if ata190:
+        return ata190
     return "--"
 
 
@@ -1124,6 +1120,7 @@ def _patrol_list_visible_whole_disks() -> List[str]:
 
 
 def _disk_size_gb_for_disk(dev_base: str) -> str:
+    """读取整盘容量，不使用分区或文件系统容量代替；保留两位小数。"""
     dev = str(dev_base or "").strip()
     if not dev or not _valid_sysfs_block_token(dev):
         return "--"
@@ -1131,7 +1128,7 @@ def _disk_size_gb_for_disk(dev_base: str) -> str:
     try:
         sectors = int(sys_size.read_text(encoding="utf-8", errors="ignore").strip())
         if sectors > 0:
-            return f"{sectors * 512 / (1024**3):.1f}"
+            return f"{sectors * 512 / (1024**3):.2f}"
     except Exception:
         pass
     out = _run_cmd(["lsblk", "-b", "-dnro", "SIZE", f"/dev/{dev}"], timeout=2.0)
@@ -1141,19 +1138,7 @@ def _disk_size_gb_for_disk(dev_base: str) -> str:
             continue
         size = int(raw)
         if size > 0:
-            return f"{size / (1024**3):.1f}"
-    return "--"
-
-
-def _disk_total_gb_for_mount(mount: str) -> str:
-    if not psutil:
-        return "--"
-    try:
-        total = psutil.disk_usage(mount).total
-        if total > 0:
-            return f"{total / (1024**3):.1f}"
-    except Exception:
-        pass
+            return f"{size / (1024**3):.2f}"
     return "--"
 
 
@@ -1422,7 +1407,11 @@ def _patrol_disk_space_gb_for_row(
     physical: str,
     vol_space_by_physical: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Tuple[str, str]:
-    """巡检单行 (剩余GB, 总容量GB)；优先 /vol 文件系统容量，再挂载点 df、findmnt。"""
+    """关联存储卷的 (剩余GB, 文件系统总容量GB)，不混入物理整盘容量。
+
+    整盘容量由调用方单独取 _disk_size_gb_for_disk（磁盘容量与数据卷是两个口径：
+    系统盘的数据卷远小于整盘，RAID 卷可大于单盘）。
+    """
     phy = str(physical or "").strip()
     m0 = str(mount or "").strip()
 
@@ -1443,12 +1432,11 @@ def _patrol_disk_space_gb_for_row(
             return fm_free, fm_tot
 
         free_s = _patrol_disk_free_gb_for_row(m0, phy, vol_space_by_physical)
-        hw_size = _disk_size_gb_for_disk(phy)
-        if free_s not in {"--", "—"} and hw_size not in {"--", "—"}:
-            return free_s, hw_size
+        if free_s not in {"--", "—"}:
+            # 只有剩余空间可读时不配分母：整盘容量 ≠ 数据卷容量（系统盘/RAID 差异大）
+            return free_s, "--"
 
-    hw_size = _disk_size_gb_for_disk(phy) if phy else "--"
-    return "--", hw_size if hw_size not in {"--", "—"} else "--"
+    return "--", "--"
 
 
 def _patrol_scan_vol_space_by_physical() -> Dict[str, Dict[str, str]]:
@@ -1736,14 +1724,18 @@ def _psutil_disk_temp_fallback(device_name: str) -> str:
             return 1
         return 5
 
-    # 1) 先按设备名匹配，再按 label 优先级
+    # 1) 仅接收带明确设备/控制器标识的条目（psutil 会把多个盘的同名 chip 合并；
+    #    nvme10 的温度绝不能配给 nvme1n1，模糊匹配已被真实误配案例否决）
+    tokens = [dev]
+    ctrl = _nvme_controller_name(dev)
+    if ctrl:
+        tokens.append(ctrl)
     candidates: List[Tuple[int, str]] = []
     for chip, entries in temps.items():
-        chip_s = str(chip or "").lower()
         for e in entries or []:
             label = str(getattr(e, "label", "") or "")
-            blob = f"{chip_s} {label.lower()}"
-            if dev not in blob and not (dev.startswith("nvme") and "nvme" in chip_s):
+            identity = f"{str(chip or '').lower()} {label.lower()}"
+            if not any(re.search(r"(?<![a-z0-9])" + re.escape(token) + r"(?![a-z0-9])", identity) for token in tokens):
                 continue
             rank = _label_rank(label)
             if rank >= 99:
@@ -1754,30 +1746,6 @@ def _psutil_disk_temp_fallback(device_name: str) -> str:
     if candidates:
         candidates.sort(key=lambda x: x[0])
         return candidates[0][1]
-
-    # 2) nvme/sata/drivetemp：取该 chip 下 rank 最低的一条（跳过 Sensor2）
-    preferred_chips: List[str] = []
-    if dev.startswith("nvme"):
-        preferred_chips = ["nvme", "drivetemp", "sata"]
-    else:
-        preferred_chips = ["drivetemp", "sata", "nvme"]
-    for pref in preferred_chips:
-        chip_cands: List[Tuple[int, str]] = []
-        for chip, entries in temps.items():
-            chip_s = str(chip or "").lower()
-            if pref not in chip_s:
-                continue
-            for e in entries or []:
-                label = str(getattr(e, "label", "") or "")
-                rank = _label_rank(label)
-                if rank >= 99:
-                    continue
-                t = _to_temp(getattr(e, "current", None))
-                if t != "--":
-                    chip_cands.append((rank, t))
-        if chip_cands:
-            chip_cands.sort(key=lambda x: x[0])
-            return chip_cands[0][1]
     return "--"
 
 
@@ -1807,10 +1775,6 @@ def _patrol_vol_row_health_temp(dev_open: str, physicals: List[str]) -> Tuple[st
         if hp0 not in {"--", "—"}:
             hs.append(hp0)
 
-    for p in phys:
-        if _patrol_sysfs_disk_running(p):
-            hs.append("健康")
-
     if any(h == "异常" for h in hs):
         health = "异常"
     elif any(h == "健康" for h in hs):
@@ -1839,11 +1803,7 @@ def _patrol_vol_row_health_temp(dev_open: str, physicals: List[str]) -> Tuple[st
 
     health_reason = ""
     if health in {"--", "—"}:
-        if any(_patrol_sysfs_disk_running(p) for p in phys) or temp not in {"--", "—"}:
-            health = "正常"
-            health_reason = ""
-        else:
-            health_reason = hr_fail
+        health_reason = hr_fail
     return health, temp, health_reason, temp_reason
 
 
@@ -1914,10 +1874,9 @@ def _collect_disk_items() -> List[Dict[str, str]]:
             temp = t if t not in {"--", "—"} else ""
         health = _smart_health_for_disk(physical)
         if health in {"--", "—"}:
-            if temp or _patrol_sysfs_disk_running(physical):
-                health = "健康"
-            else:
-                health = ""
+            # 无 smartctl 数据时不做「盘在转=健康」的弱信号兜底：
+            # SCSI 盘 SMART Health Status: FAILED 曾被 running 状态掩盖成正常
+            health = ""
         if health == "健康":
             health = "正常"
         health_reason = ""
@@ -1929,14 +1888,16 @@ def _collect_disk_items() -> List[Dict[str, str]]:
             temp = "--"
             temp_reason = _SMART_UNAVAILABLE_HINT
         m_pick = _patrol_best_mount_for_physical(physical)
-        free_s, size_s = _patrol_disk_space_gb_for_row(m_pick, physical, vol_space_by_physical)
+        free_s, filesystem_size = _patrol_disk_space_gb_for_row(m_pick, physical, vol_space_by_physical)
+        disk_size = _disk_size_gb_for_disk(physical)
         items.append(
             {
                 "name": "",
                 "device": physical,
                 "mount_point": m_pick,
                 "free_gb": free_s if free_s else "--",
-                "size_gb": size_s if size_s else "--",
+                "size_gb": disk_size if disk_size else "--",
+                "filesystem_size_gb": filesystem_size if filesystem_size else "--",
                 "temp_c": temp,
                 "status": health,
                 "temp_reason": temp_reason,

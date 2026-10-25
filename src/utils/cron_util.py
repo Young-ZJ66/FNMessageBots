@@ -92,8 +92,9 @@ def _cron_matches(dt: datetime, parts: Sequence[str]) -> bool:
     else:
         doms = list(range(1, 32))
     if not dow_any:
-        # cron：0、7 都是周日；Python weekday(): Mon=0 ... Sun=6 → cron Sun=0
-        dows_raw = _parse_cron_field(dow.replace("7", "0"), 0, 7)
+        # cron：0、7 都是周日；Python weekday(): Mon=0 ... Sun=6 → cron Sun=0。
+        # 不能先把 "7" 替换成 "0"：会破坏 1-7、6-7 这类区间（变成 1-0/6-0 直接报错）
+        dows_raw = _parse_cron_field(dow, 0, 7)
         dows = {(d % 7) for d in dows_raw}
     else:
         dows = set(range(0, 7))
@@ -131,7 +132,7 @@ def _next_cron_timestamp_fallback(expr: str, base_ts: float) -> float:
         if i == 4 and f == "*":
             continue
         try:
-            _parse_cron_field(f.replace("7", "0") if i == 4 else f, lo, hi if i != 4 else 7)
+            _parse_cron_field(f, lo, hi)
         except ValueError as e:
             raise ValueError(f"Cron 表达式无效：{e}") from e
 
@@ -239,12 +240,21 @@ def next_cron_timestamp(expr: str, base_ts: float) -> float:
     """
     s = validate_cron_expr(expr)
     base = float(base_ts)
-    fb = _next_cron_timestamp_fallback(s, base)
+    ci = None
     if croniter is not None:
         try:
-            ci = float(croniter(s, base).get_next(float))
-            if abs(ci - fb) <= 2 * 3600:
-                return ci
+            # naive 本地时间会 croniter 被 当 UTC（偏 +8h）；喂 aware 本地时间
+            local_base = datetime.fromtimestamp(base).astimezone()
+            ci = float(croniter(s, local_base).get_next(datetime).timestamp())
         except Exception:
             pass
+    try:
+        fb = _next_cron_timestamp_fallback(s, base)
+    except ValueError:
+        # croniter 接受的 MON / JAN 等名称，内置解析器不支持。
+        if ci is not None:
+            return ci
+        raise
+    if ci is not None and abs(ci - fb) <= 2 * 3600:
+        return ci
     return fb

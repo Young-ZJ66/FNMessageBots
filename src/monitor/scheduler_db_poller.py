@@ -223,8 +223,9 @@ class SchedulerDBPoller:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def _get_latest_watermark(self) -> Dict[str, Any]:
-        """获取当前数据库最新已完成记录的水位，用于首次启动时初始化游标。"""
+    def _get_latest_watermark(self) -> Optional[Dict[str, Any]]:
+        """获取当前数据库最新已完成记录的水位；失败返回 None（调用方重试对齐，
+        不把查询失败当空库）。"""
         sql = """
         SELECT id, finished_at
         FROM task_results
@@ -238,7 +239,6 @@ class SchedulerDBPoller:
             # schema 自检只在首次调用时实际执行（内部去重）
             probe_schema(conn, "scheduler", self.logger, self.db_path)
             row = conn.execute(sql).fetchone()
-            conn.close()
             if not row:
                 return {"last_finished_at": "", "last_id": 0}
             return {
@@ -247,7 +247,13 @@ class SchedulerDBPoller:
             }
         except Exception as e:
             self.logger.warning("获取任务计划数据库最新水位失败: %s", e)
-            return {"last_finished_at": "", "last_id": 0}
+            return None
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _fetch_rows(self, from_finished_at_ts: float) -> List[Dict[str, Any]]:
         """查询 finished_at >= from_finished_at_ts 的已完成记录，联表获取任务名。
@@ -418,9 +424,19 @@ class SchedulerDBPoller:
     def _run_loop(self) -> None:
         self._load_dedup()
         cursor = self._read_cursor()
-        # 首次启动：初始化水位，避免补发历史记录
+        # 首次启动：初始化水位，避免补发历史记录（查询失败 ≠ 空库，等待重试对齐）
         if not cursor.get("last_finished_at") and cursor.get("last_id") == 0:
-            cursor = self._get_latest_watermark()
+            latest = self._get_latest_watermark()
+            while latest is None and self.running:
+                self.logger.warning("任务计划数据库暂不可读，%s 秒后重试对齐（不把失败当空库）", self.poll_interval)
+                for _ in range(self.poll_interval):
+                    if not self.running:
+                        return
+                    time.sleep(1)
+                latest = self._get_latest_watermark()
+            if latest is None:
+                return
+            cursor = latest
             self._write_cursor(cursor["last_finished_at"], cursor["last_id"])
             self.logger.info(
                 "任务计划轮询启动，仅处理水位之后的新记录: finished_at=%s id=%s",
@@ -440,6 +456,9 @@ class SchedulerDBPoller:
     def _align_cursor_to_latest(self) -> None:
         """每次启用时对齐到当前最新水位，避免补发停用期间的存量记录。"""
         latest = self._get_latest_watermark()
+        if latest is None:
+            self.logger.warning("任务计划数据库暂不可读，本次未对齐（保留原游标，下轮重试）")
+            return
         self._write_cursor(latest["last_finished_at"], latest["last_id"])
         self.logger.info(
             "任务计划轮询启用时已对齐当前水位（不补历史）: finished_at=%s id=%s",

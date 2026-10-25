@@ -226,11 +226,19 @@ _fnmb_compose_recreate() {
     export TRIM_API_TOKEN="${TRIM_API_TOKEN:-}"
     export TRIM_SYS_VERSION="${TRIM_SYS_VERSION:-}"
     if docker compose version >/dev/null 2>&1; then
-      docker compose -f docker-compose.yaml up -d --force-recreate --remove-orphans
+        docker compose -f docker-compose.yaml up -d --force-recreate --remove-orphans
     elif command -v docker-compose >/dev/null 2>&1; then
-      docker-compose -f docker-compose.yaml up -d --force-recreate --remove-orphans
+        docker-compose -f docker-compose.yaml up -d --force-recreate --remove-orphans
     fi
-  ) >>"${_FNMB_LOG:-/dev/null}" 2>&1 || _fnmb_log "recreate failed"
+  ) >>"${_FNMB_LOG:-/dev/null}" 2>&1 || {
+    _fnmb_log "recreate failed"
+    # compose 渲染/重建失败对用户不可见（应用窗口无报错），补一条用户可见提示
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+      printf '警告：容器重建失败，详情见 %s\n' "${_FNMB_LOG}" >>"${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
+    fi
+    return 1
+  }
+  return 0
 }
 
 fnmb_write_vol_compose_override() {

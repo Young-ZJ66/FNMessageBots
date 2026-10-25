@@ -9,10 +9,24 @@
    ========================================================================== */
 
 async function initAuth() {
-  const res = await fetch("api/auth/status", fetchOpts);
-  const data = await res.json();
   const authGate = document.getElementById("auth-gate");
   const appMain = document.getElementById("app-main");
+  const retryBtn = document.getElementById("auth-retry-btn");
+  let data;
+  try {
+    const res = await fetch("api/auth/status", fetchOpts);
+    data = await res.json();
+  } catch (err) {
+    // 应用重启/网络失败：不能停在两个区块都隐藏的空白页，给出重试入口
+    authGate.style.display = "flex";
+    appMain.style.display = "none";
+    if (retryBtn) retryBtn.style.display = "block";
+    const loginMsg = document.getElementById("auth-login-msg");
+    loginMsg.textContent = "无法连接服务，请检查应用状态后重试。";
+    loginMsg.className = "auth-msg error";
+    return;
+  }
+  if (retryBtn) retryBtn.style.display = "none";
   setupRequiresCode = !!data.setup_requires_code;
   passwordMinLength = data.password_min_length || 8;
   document.getElementById("set-pw-code-wrap").style.display = setupRequiresCode ? "block" : "none";
@@ -29,6 +43,8 @@ async function initAuth() {
   document.getElementById("auth-set-msg").textContent = "";
   document.getElementById("auth-login-msg").textContent = "";
 }
+
+document.getElementById("auth-retry-btn").addEventListener("click", initAuth);
 
 document.getElementById("form-set-password").addEventListener("submit", async function(e) {
   e.preventDefault();

@@ -40,8 +40,23 @@ permissions:
   packages: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 回归测试（纯标准库，无需安装依赖）
+        run: python tests/run_all.py
+
   build:
     runs-on: ubuntu-latest
+    needs: test
     env:
       # 分支构建默认打 latest；手动触发时由 push_latest 决定
       WANT_LATEST: ${{ github.event_name != 'workflow_dispatch' || inputs.push_latest }}

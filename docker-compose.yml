@@ -36,6 +36,8 @@ services:
       # - /var/lib/dpkg/status:/host/dpkg/status:ro
       # 可选：宿主主机名（巡检用，避免显示容器 ID）
       # - /etc/hostname:/host/etc/hostname:ro
+      # 可选：宿主系统版本（巡检读取 /host/etc/os-release，避免显示镜像自己的 Debian 版本）
+      # - /etc/os-release:/host/etc/os-release:ro
       # 可选：UPS 巡检（挂 /etc/nut 目录；无 ups.conf 时跳过 UPS，不导致启动失败）
       # - /etc/nut:/etc/nut:ro
     # 可选：盘温/健康采集（smartctl 直连读 SMART，不唤醒休眠盘——探测带 -n standby）。

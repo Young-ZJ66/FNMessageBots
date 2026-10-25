@@ -749,6 +749,7 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
             return ""
         now = time.time()
         if now - self._nas_uid_name_cache_loaded_at > 60:
+            conn = None
             try:
                 conn = connect_readonly_with_fallback(
                     self.logger_user_lookup_db_path,
@@ -765,11 +766,17 @@ class MultiPlatformNotifier(ChannelSendersMixin, ContentBuildersMixin, MessageRe
                     sn = str(n or "").strip()
                     if su and sn and su not in mapping:
                         mapping[su] = sn
-                conn.close()
                 self._nas_uid_name_cache = mapping
                 self._nas_uid_name_cache_loaded_at = now
             except Exception:
                 return ""
+            finally:
+                # execute 抛错也不能泄漏连接（该函数最多 60s 一次）
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
         return self._nas_uid_name_cache.get(str(uid), "")
 
     def _album_nickname_from_map(self, nas_uid: Any, _photo_user_id: Any) -> str:

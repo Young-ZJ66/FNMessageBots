@@ -155,7 +155,9 @@ class BackupDBPoller:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def _get_latest_watermark(self) -> Dict[str, int]:
+    def _get_latest_watermark(self) -> Optional[Dict[str, int]]:
+        """查询最新水位；失败返回 None（调用方等待重试对齐，不把失败当空库）。"""
+        conn = None
         try:
             conn = self._connect()
             # schema 自检只在首次调用时实际执行（内部去重）
@@ -170,7 +172,6 @@ class BackupDBPoller:
                 LIMIT 1
                 """
             ).fetchone()
-            conn.close()
             if not row:
                 return {"last_finished_time": 0, "last_id": 0}
             return {
@@ -179,7 +180,13 @@ class BackupDBPoller:
             }
         except Exception as e:
             self.logger.warning("获取备份数据库最新水位失败: %s", e)
-            return {"last_finished_time": 0, "last_id": 0}
+            return None
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _fetch_rows_with_lookback(self, from_event_time: int) -> List[Dict[str, Any]]:
         sql = """
@@ -351,7 +358,18 @@ class BackupDBPoller:
         self._load_dedup()
         cursor = self._read_cursor()
         if int(cursor.get("last_finished_time") or 0) <= 0 and int(cursor.get("last_id") or 0) <= 0:
-            cursor = self._get_latest_watermark()
+            latest = self._get_latest_watermark()
+            while latest is None and self.running:
+                # 查询失败 ≠ 空库：等待重试对齐，避免恢复后把存量记录当新事件
+                self.logger.warning("备份数据库暂不可读，%s 秒后重试对齐（不把失败当空库）", self.poll_interval)
+                for _ in range(self.poll_interval):
+                    if not self.running:
+                        return
+                    time.sleep(1)
+                latest = self._get_latest_watermark()
+            if latest is None:
+                return
+            cursor = latest
             self._write_cursor(cursor["last_finished_time"], cursor["last_id"])
             self.logger.info(
                 "备份轮询启动，仅处理水位之后的新记录: finished_time=%s id=%s",
@@ -371,6 +389,9 @@ class BackupDBPoller:
     def _align_cursor_to_latest(self) -> None:
         """每次启用时对齐到当前最新水位，避免补发停用期间的存量记录。"""
         latest = self._get_latest_watermark()
+        if latest is None:
+            self.logger.warning("备份数据库暂不可读，本次未对齐（保留原游标，下轮重试）")
+            return
         self._write_cursor(latest["last_finished_time"], latest["last_id"])
         self.logger.info(
             "备份轮询启用时已对齐当前水位（不补历史）: finished_time=%s id=%s",

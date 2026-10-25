@@ -72,16 +72,20 @@ def _ip_version(ip: str) -> Optional[int]:
         return None
 
 
-def _fetch_wan_ip(known_ip: Optional[str] = None) -> str:
-    """始终优先探测；能拿到 IPv4 就用 IPv4，拿不到才用 IPv6。
+def _fetch_wan_ip(known_ip: Optional[str] = None, reuse_known: bool = False) -> str:
+    """探测外网 IP：优先 IPv4，拿不到才用 IPv6。
 
     known_ip 仅作提示：若探测结果落到 IPv6、而已知为有效 IPv4，则保留 IPv4，
     避免巡检传入的偶发 IPv6 覆盖稳定 IPv4。
+    reuse_known=True（巡检协同）：巡检载荷里已是有效的全局 IP 时直接复用，
+    不再对公网接口做第二轮探测。
     """
+    known = (known_ip or "").strip()
+    if reuse_known and known and known != "--" and _is_global_wan_ip(known):
+        return known
     from monitor.nas_patrol import _pick_wan_ip
 
     picked = (_pick_wan_ip() or "").strip() or "--"
-    known = (known_ip or "").strip()
     if known and known != "--":
         kv, pv = _ip_version(known), _ip_version(picked)
         # 探测失败时沿用已知 IP
@@ -97,11 +101,24 @@ def _fetch_wan_ip(known_ip: Optional[str] = None) -> str:
     return picked
 
 
+def _is_global_wan_ip(ip: str) -> bool:
+    try:
+        import ipaddress
+
+        addr = ipaddress.ip_address((ip or "").strip())
+    except Exception:
+        return False
+    if addr.is_multicast or addr.is_loopback or addr.is_link_local or addr.is_unspecified:
+        return False
+    return addr.is_global
+
+
 def check_and_notify_wan_ip_change(
     app: Any,
     *,
     source: str = "timer",
     known_ip: Optional[str] = None,
+    reuse_known: bool = False,
 ) -> Optional[str]:
     """
     检测外网 IP；首次仅记录基线，变化则推送。
@@ -121,7 +138,7 @@ def check_and_notify_wan_ip_change(
 
     with _lock:
         state = _load_state(sp)
-        current = _fetch_wan_ip(known_ip)
+        current = _fetch_wan_ip(known_ip, reuse_known=reuse_known)
         now = time.time()
         state["last_check_ts"] = now
 
@@ -172,7 +189,7 @@ def check_and_notify_wan_ip_change(
     msg = f"外网 IP 变化: {last} → {current}（source={source}）"
     log.warning(msg)
     try:
-        app.notifier.send_notification(
+        result = app.notifier.send_notification(
             event_type=WAN_IP_CHANGED,
             event_data=event_data,
             raw_log=raw_log,
@@ -180,6 +197,11 @@ def check_and_notify_wan_ip_change(
         )
     except Exception as e:
         log.error("外网 IP 变化推送失败（保留旧基线以便重试）: %s", e, exc_info=True)
+        return current
+    # 全渠道失败时 send_notification 不抛异常、只回 success=False：
+    # 此时保留旧基线，下一轮检测仍视为变化并重试，否则本次变更永久漏报
+    if getattr(result, "success", True) is False:
+        log.warning("外网 IP 变化推送未成功（全渠道失败），保留旧基线 %s 以便重试", last)
         return current
 
     with _lock:

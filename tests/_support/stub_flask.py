@@ -78,7 +78,8 @@ class Request:
         self.method = method.upper()
         self.path = path
         self.args = MultiDict(args)
-        self.cookies = dict(cookies or {})
+        # MultiDict：会话读取用 getlist 处理「根路径 + 网关前缀」同名多 cookie
+        self.cookies = MultiDict({k: v for k, v in (cookies or {}).items()})
         self.environ = dict(environ or {})
         self.remote_addr = remote_addr
         self.script_root = script_root
@@ -113,6 +114,25 @@ class _RequestProxy:
 
 
 request = _RequestProxy()
+
+
+class _GProxy:
+    """模块级 `g`：请求期间的临时变量命名空间（会话 cookie 刷新标记等）。"""
+
+    def __init__(self) -> None:
+        self._store: Dict[str, Any] = {}
+
+    def __getattr__(self, name: str) -> Any:
+        return self._store.get(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("_"):
+            super().__setattr__(name, value)
+        else:
+            self._store[name] = value
+
+
+g = _GProxy()
 
 
 class Response:
@@ -235,8 +255,8 @@ class TestClient:
                       remote_addr=remote_addr, script_root=script_root)
         request._bind(req)
 
-        view, kwargs = self.app._match(path_only, req.method)
         try:
+            view, kwargs = self.app._match(path_only, req.method)
             # 关键：before_request 必须对**所有**请求先跑（真实 Flask 亦然），
             # 否则鉴权闸门会被绕过，鉴权测试会假通过。
             result = self.app._handle_before_request()
@@ -342,16 +362,21 @@ class Flask:
 
     # ── 派发 ──
     def _match(self, path: str, method: str) -> Tuple[Optional[_View], Dict[str, Any]]:
+        path_matched = False
         for v in self.views:
             m = v.regex.match(path)
             if not m:
                 continue
+            path_matched = True
             if method.upper() not in v.methods:
                 continue
             kwargs: Dict[str, Any] = {}
             for name in v.names:
                 kwargs[name] = _coerce(v, name, m.group(name))
             return v, kwargs
+        if path_matched:
+            # 路径存在但方法不对：与真实 Flask 一致返回 405，而不是 404
+            raise HTTPException(405)
         return None, {}
 
     def _handle_before_request(self) -> Any:

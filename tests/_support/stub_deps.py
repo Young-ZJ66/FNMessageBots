@@ -203,6 +203,7 @@ def install() -> None:
         flask_mod.Flask = stub_flask.Flask
         flask_mod.Response = stub_flask.Response
         flask_mod.request = stub_flask.request
+        flask_mod.g = stub_flask.g
         flask_mod.jsonify = stub_flask.jsonify
         flask_mod.render_template = stub_flask.render_template
         flask_mod.send_from_directory = stub_flask.send_from_directory

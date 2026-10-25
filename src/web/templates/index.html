@@ -39,13 +39,14 @@
       </div>
       <div id="auth-login" style="display:none;">
         <div class="auth-title">输入访问密码</div>
-        <div class="auth-sub">会话有效期为 5 分钟，关闭页面后若未超时无需重新输入</div>
+        <div class="auth-sub">登录后连续 15 分钟无操作才需重新输入；未过期时打开或刷新页面可直接进入</div>
         <form class="auth-form" id="form-login">
           <div class="field-label">密码</div>
           <input type="password" id="login-password" placeholder="请输入密码" autocomplete="current-password" />
           <button type="submit" class="btn btn-primary btn-block">登录</button>
         </form>
         <div id="auth-login-msg" class="auth-msg"></div>
+        <button type="button" class="btn btn-ghost btn-block" id="auth-retry-btn" style="display:none;">重新连接</button>
       </div>
     </div>
     <p class="license-footer">{{ footer_text }}</p>
@@ -468,6 +469,7 @@
 {% block scripts %}
   <script src="assets/js/core.js"></script>
   <script src="assets/js/auth.js"></script>
+  <script src="session-guard.js"></script>
   <script src="assets/js/tabs.js"></script>
   <script src="assets/js/channels.js"></script>
   <script src="assets/js/events.js"></script>

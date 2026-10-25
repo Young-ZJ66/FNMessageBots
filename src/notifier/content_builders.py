@@ -313,7 +313,7 @@ class ContentBuildersMixin:
                 return "--"
             return f"{v}℃"
 
-        def _size(v: str) -> str:
+        def _size(v: str, precision: int = 1) -> str:
             if v in {"--", "—"}:
                 return "--"
             try:
@@ -321,8 +321,8 @@ class ContentBuildersMixin:
             except (TypeError, ValueError):
                 return "--"
             if gb >= 1024:
-                return f"{gb / 1024:.1f}TB"
-            return f"{gb:.1f}GB"
+                return f"{gb / 1024:.{precision}f}TB"
+            return f"{gb:.{precision}f}GB"
 
         host = _v("hostname")
         lan_ip = _v("lan_ip")
@@ -375,19 +375,16 @@ class ContentBuildersMixin:
                     head = label or dev or "unknown"
                 free_gb = str(d.get("free_gb") or "--")
                 free_text = _size(free_gb)
-                size_text = _size(str(d.get("size_gb") or "--"))
+                # 磁盘容量（整盘）与存储空间剩余（数据卷）是两个口径，分两行展示
+                size_text = _size(str(d.get("size_gb") or "--"), precision=2)
+                filesystem_size_text = _size(str(d.get("filesystem_size_gb") or "--"))
                 temp_c = _temp(str(d.get("temp_c") or "--"))
                 status = str(d.get("status") or "--")
                 if status == "健康":
                     status = "正常"
                 lines.append(f"【{head}】")
-                if size_text != "--":
-                    free_show = free_text if free_text != "--" else "--"
-                    lines.append(f"剩余空间: {free_show} / {size_text}")
-                elif free_text != "--":
-                    lines.append(f"剩余空间: {free_text}")
-                else:
-                    lines.append("剩余空间: -- / --")
+                lines.append(f"硬盘容量: {size_text}")
+                lines.append(f"存储空间剩余: {free_text} / {filesystem_size_text}")
                 lines.append(f"温度: {temp_c}")
                 lines.append(f"健康状态: {status}")
         return "\n".join(lines)

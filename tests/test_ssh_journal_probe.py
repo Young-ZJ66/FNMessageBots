@@ -193,8 +193,9 @@ class TestAlignCursor(ProbeCase):
         self.poller._align_cursor(state)
         self.assertEqual(state["cursor"], "", "拿不到游标时不应写入假值")
         self.assertTrue(state["aligned"])
+        self.assertTrue(state.get("since"), "空 journal 应记录时间起点，等待新日志")
         warn = self.messages(logging.WARNING)
-        self.assertEqual(warn.count("SSH 事件将不会推送"), 1, f"告警应只打一次，实际：{warn}")
+        self.assertEqual(warn.count("SSH journal 暂无游标"), 1, f"告警应只打一次，实际：{warn}")
 
     def test_warning_includes_journalctl_output(self):
         """失败时必须留下 journalctl 的实际输出，否则无从排查。"""

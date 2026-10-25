@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import threading
 import time
 from pathlib import Path
@@ -144,15 +143,23 @@ def _send_patrol_notification(
             logger.warning("NAS 巡检跳过：未配置推送渠道（notifier 为空）")
         return False
     payload = _collect_patrol_payload(cfg, {})
-    # 巡检触发时顺带检测外网 IP（仅用户勾选 WAN_IP_CHANGED 时生效）
+    # 巡检触发时顺带检测外网 IP（仅用户勾选 WAN_IP_CHANGED 时生效）；
+    # 巡检载荷里已有有效的全局 IP 时直接复用，不对公网接口做第二轮探测
     try:
         from monitor.wan_ip_monitor import check_and_notify_wan_ip_change
 
-        check_and_notify_wan_ip_change(
+        checked = check_and_notify_wan_ip_change(
             app,
             source="patrol",
             known_ip=str(payload.get("wan_ip") or ""),
+            reuse_known=True,
         )
+        if checked and str(checked) not in {"", "--"}:
+            checked = str(checked)
+            if str(payload.get("wan_ip") or "") in {"", "--"}:
+                missing = [m for m in (payload.get("missing_fields") or []) if m != "外网IP"]
+                payload["missing_fields"] = missing
+            payload["wan_ip"] = checked
     except Exception as e:
         if logger:
             logger.warning("巡检触发外网 IP 检测失败: %s", e)
@@ -212,31 +219,6 @@ def run_nas_patrol_now(app: Any) -> tuple[bool, str]:
         print(f"NAS 巡检：{msg}", flush=True)
         return True, msg
     return False, "巡检推送失败，请查看容器日志与推送记录。"
-
-
-def _patrol_star_interval_seconds(cron_expr: str) -> Optional[int]:
-    """识别 ``*/N * * * *``，返回间隔秒数；其它表达式返回 None。"""
-    try:
-        from utils.cron_util import normalize_cron_expr
-
-        s = normalize_cron_expr(cron_expr or "")
-    except Exception:
-        s = re.sub(r"\s+", " ", (cron_expr or "").strip())
-    parts = s.split(" ")
-    if len(parts) != 5:
-        return None
-    if parts[1:] != ["*", "*", "*", "*"]:
-        return None
-    m = re.fullmatch(r"\*/(\d+)", parts[0])
-    if not m:
-        return None
-    try:
-        n = int(m.group(1))
-    except ValueError:
-        return None
-    if 1 <= n <= 59:
-        return n * 60
-    return None
 
 
 def nas_patrol_worker_loop(app: Any) -> None:
@@ -303,12 +285,8 @@ def nas_patrol_worker_loop(app: Any) -> None:
                     state["retry_until_ts"] = 0.0
                     state["retry_backoff_sec"] = RETRY_BACKOFF_BASE_SEC
                     _save_state(sp, state)
-                    interval_s0 = _patrol_star_interval_seconds(cron_expr)
                     try:
-                        if interval_s0 is not None:
-                            nxt = now + float(interval_s0)
-                        else:
-                            nxt = next_cron_timestamp(cron_expr, now)
+                        nxt = next_cron_timestamp(cron_expr, now)
                         wait_min = max(0.0, (nxt - now) / 60.0)
                         nxt_str = format_ts_for_display(nxt)
                     except Exception as e:
@@ -342,30 +320,20 @@ def nas_patrol_worker_loop(app: Any) -> None:
                 state["last_success_ts"] = now
                 _save_state(sp, state)
 
-            interval_s = _patrol_star_interval_seconds(cron_expr)
-            # */N * * * *：只用「距上次成功 N 分钟」，避开 croniter 时区偏差（曾出现 +8 小时）
-            if interval_s is not None:
-                base_ls = last_success if last_success > 0 else now
-                next_ts = base_ls + float(interval_s)
-                if next_ts < now - 5:
-                    next_ts = now
-            else:
-                try:
-                    next_ts = next_cron_timestamp(
-                        cron_expr, last_success if last_success > 0 else now
-                    )
-                except Exception as e:
-                    msg = f"NAS 巡检 Cron 无效 ({cron_expr}): {e}"
-                    log.error(msg)
-                    time.sleep(60)
-                    continue
+            try:
+                next_ts = next_cron_timestamp(
+                    cron_expr, last_success if last_success > 0 else now
+                )
+            except Exception as e:
+                msg = f"NAS 巡检 Cron 无效 ({cron_expr}): {e}"
+                log.error(msg)
+                time.sleep(60)
+                continue
 
             due = now >= next_ts
             if not due:
                 due_at = next_ts
                 sleep_s = min(60.0, max(5.0, due_at - now))
-                if interval_s is not None:
-                    sleep_s = min(sleep_s, float(interval_s))
                 # 下次触发时间不变只记一次
                 if abs(due_at - _last_wait_due) > 1:
                     nxt_str = format_ts_for_display(due_at)
@@ -374,8 +342,7 @@ def nas_patrol_worker_loop(app: Any) -> None:
                 time.sleep(sleep_s)
                 continue
 
-            reason = "间隔已到" if interval_s is not None else "Cron 触发"
-            log.info("NAS 巡检开始采集并推送（Cron=%s，%s）", cron_expr, reason)
+            log.info("NAS 巡检开始采集并推送（Cron=%s）", cron_expr)
             ok = _send_patrol_notification(app, log)
             now_after = time.time()
             if ok:

@@ -284,7 +284,9 @@ class PhotoDBPoller:
                     self._fingerprint(PHOTO_SHARE_EXPIRED, json.dumps(raw, sort_keys=True, ensure_ascii=False)[:400])
                 ] = now
         except Exception as e:
-            self.logger.warning("相册过期基线去重失败: %s", e)
+            # 去重基线失败保持未初始化，下一轮重试对齐（半截基线会漏报过期分享）
+            self.logger.warning("相册过期基线去重失败，保持未对齐待重试: %s", e)
+            return
         state["initialized"] = True
         state["face_pending"] = self._empty_face_pending()
         self.logger.info(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -21,7 +22,7 @@ if __name__ == "__main__":
     if _src.exists() and str(_src) not in sys.path:
         sys.path.insert(0, str(_src))
 
-from flask import Flask, jsonify, request, render_template, send_from_directory, abort, redirect
+from flask import Flask, g, jsonify, request, render_template, send_from_directory, abort, redirect
 
 from notifier.channel_params import validate_channel_json
 from notifier.multi_platform_notifier import MultiPlatformNotifier
@@ -30,6 +31,7 @@ from web.access_guard import LoginRateLimiter
 from web.access_guard import SetupCodeStore
 from web.access_guard import StripGatewayHeadersMiddleware
 from web.access_guard import auth_disabled_by_env as _auth_disabled_by_env
+from web.access_guard import client_address
 from web.access_guard import gateway_identity as _gateway_identity_from_environ
 from web.access_guard import is_loopback_request as _is_loopback_request_environ
 from web.auth_service import PASSWORD_MIN_LENGTH
@@ -94,17 +96,36 @@ from web.event_catalog import build_events_for_ui
 from config_db_paths import apply_discovered_db_paths
 from monitor.docker_events_poller import DOCKER_POLL_EVENTS
 from monitor.docker_socket_access import check_docker_socket_access
+from monitor.ssh_journal_poller import SSH_JOURNAL_EVENTS
 from web.push_history_service import get_record as get_push_history_record
 from web.push_history_service import get_stats as get_push_history_stats
 from web.push_history_service import list_records as list_push_history_records
 from web.session_service import create_session as _create_session
+from web.session_service import delete_session as _delete_session
+from web.session_service import session_remaining_seconds as _session_remaining_seconds
 from web.session_service import touch_session as _touch_session
 from monitor.sqlite_uri import connect_readonly_with_fallback
 
-# 配置页密码：会话空闲超时（秒），超时后需重新输入密码
-SESSION_IDLE_SECONDS = 300
+# 配置页密码：会话空闲超时（秒）。只在真实交互（POST）时续期，
+# 统计、配置读取和身份轮询不延长登录时长——页面开着 15 分钟无操作即需重登
+SESSION_IDLE_SECONDS = 15 * 60
 AUTH_COOKIE_NAME = "fnmb_session"
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+_config_lock = threading.RLock()
+
+
+def _config_transaction(fn):
+    """配置「读-改-写」与设密的进程内互斥：并发保存/设密不能互相覆盖丢键。"""
+    @functools.wraps(fn)
+    def wrapped(*args, **kwargs):
+        with _config_lock:
+            return fn(*args, **kwargs)
+    return wrapped
+
+
+def _auth_cookie_path() -> str:
+    """cookie 作用域随网关前缀：/app/<appname>/ 下与根路径部署互不串扰。"""
+    return (request.script_root or "").rstrip("/") + "/"
 
 
 def _session_cookie_secure() -> bool:
@@ -122,7 +143,7 @@ def _auth_cookie_kwargs() -> dict:
         "max_age": SESSION_IDLE_SECONDS,
         "httponly": True,
         "samesite": "Lax",
-        "path": "/",
+        "path": _auth_cookie_path(),
         "secure": _session_cookie_secure(),
     }
 
@@ -132,7 +153,11 @@ def _has_password_set() -> bool:
 
 
 def _get_session_id_from_cookie() -> str:
-    return (request.cookies.get(AUTH_COOKIE_NAME) or "").strip()
+    # 浏览器可能同时持有旧根路径和网关路径的同名 Cookie；按服务端作用域选有效会话。
+    for sid in request.cookies.getlist(AUTH_COOKIE_NAME):
+        if _session_remaining_seconds(sid, SESSION_IDLE_SECONDS, scope=_auth_cookie_path()) > 0:
+            return sid
+    return ""
 
 
 _setup_codes = SetupCodeStore(CONFIG_FILE.parent / ".setup_code")
@@ -144,14 +169,25 @@ def _gateway_identity():
 
 
 def _is_authenticated() -> bool:
-    """统一网关的 NAS 管理员、显式关闭鉴权的部署，或持有有效会话。"""
+    """统一网关的 NAS 管理员、显式关闭鉴权的部署，或持有有效会话。
+
+    会话检查无副作用（后台读取不续期）；续期只发生在写请求（见 _require_auth）。
+    """
     # 先判断「显式关闭鉴权」：该判断无副作用（可能打印一次提示），避免每个请求都先解析网关身份
     if _auth_disabled_by_env():
         return True
     gw = _gateway_identity()
     if gw is not None:
         return bool(gw["is_admin"])
-    return _touch_session(_get_session_id_from_cookie(), SESSION_IDLE_SECONDS)
+    return _session_remaining_seconds(_get_session_id_from_cookie(), SESSION_IDLE_SECONDS, scope=_auth_cookie_path()) > 0
+
+
+def _session_auth_active() -> bool:
+    """当前鉴权是否来自应用密码会话（只有这种才续期/滚动刷新 cookie；
+    网关管理员凭 NAS 登录态、显式关闭鉴权凭环境变量，均无会话可续）。"""
+    if _auth_disabled_by_env():
+        return False
+    return _gateway_identity() is None
 
 
 def _setup_requires_code() -> bool:
@@ -163,9 +199,11 @@ def _setup_requires_code() -> bool:
 
 
 def _client_key() -> str:
-    return (request.remote_addr or "unknown").strip()
+    gw = _gateway_identity()
+    return f"gateway:{gw['uid']}" if gw is not None else client_address(request.environ)
 
 
+@_config_transaction
 def _apply_initial_password_from_env() -> None:
     """FNMB_WEB_PASSWORD：未设密码时用作初始密码（手装 Docker 可在 compose 中预置）。"""
     pw = (os.getenv("FNMB_WEB_PASSWORD") or "").strip()
@@ -229,7 +267,11 @@ def _docker_socket_access_warning(sock_path: str) -> str | None:
 
 
 def _check_db_access_issue(db_path: str, probe_sql: str = "SELECT 1") -> str:
-    """检查数据库可读性并返回可读提示；无问题时返回空字符串。"""
+    """检查数据库可读性并返回可读提示；无问题时返回空字符串。
+
+    打开已知文件只需父目录 x 权限，不要求每层目录都能列出内容；
+    WAL 模式下的 -wal/-shm 附属文件也要可读，否则只读连接会失败。
+    """
     path = (db_path or "").strip()
     if not path:
         return ""
@@ -242,12 +284,10 @@ def _check_db_access_issue(db_path: str, probe_sql: str = "SELECT 1") -> str:
     for d in chain:
         try:
             st = d.stat()
-            can_enter = os.access(d, os.X_OK)
-            can_read = os.access(d, os.R_OK)
-            if not can_enter or not can_read:
+            if not os.access(d, os.X_OK):
                 return (
-                    f"{path}: 目录 `{d}` 权限不足（{_mode_str(st.st_mode)}）。"
-                    f" 建议 `chmod 755 '{d}'`，或 `chown/chmod 750` 给服务用户。"
+                    f"{path}: 目录 `{d}` 不可进入（{_mode_str(st.st_mode)}）。"
+                    f" 建议按实际路径给应用账号授 ACL（见常见问题页第 12 条），或 `chown/chmod 750` 给服务用户。"
                 )
         except FileNotFoundError:
             return f"{path}: 目录不存在 `{d}`。"
@@ -261,7 +301,7 @@ def _check_db_access_issue(db_path: str, probe_sql: str = "SELECT 1") -> str:
         if not os.access(p, os.R_OK):
             return (
                 f"{path}: 文件不可读（{_mode_str(st.st_mode)}）。"
-                f" 建议 `chmod 644 '{p}'`，或 `chown/chmod 640` 给服务用户。"
+                    f" 建议按实际路径给应用账号授 ACL（见常见问题页第 12 条），或 `chown/chmod 640` 给服务用户。"
             )
     except FileNotFoundError:
         return f"{path}数据库文件不存在。"
@@ -270,10 +310,29 @@ def _check_db_access_issue(db_path: str, probe_sql: str = "SELECT 1") -> str:
     except Exception as e:
         return f"{path}: 文件检查失败 `{p}`（{e}）。"
 
+    # WAL 附属文件：存在但不可读会让只读连接在并发写入时失败
+    for suffix in ("-wal", "-shm"):
+        side = Path(str(p) + suffix)
+        if side.exists() and not os.access(side, os.R_OK):
+            return f"{path}: WAL 附属文件 `{side.name}` 不可读，需一并授权（见常见问题页第 12 条）。"
+
     try:
         conn = connect_readonly_with_fallback(path, timeout=2.0, table_probe_sql=probe_sql)
         conn.close()
     except Exception as e:
+        msg = str(e).lower()
+        if "no such table" in msg or "no such column" in msg:
+            return (
+                f"{path}: 数据库结构不兼容（{e}）。加权限不能解决结构问题；"
+                "请确认路径指向的是本项目预期的库文件，并核对该系统应用的数据库版本。"
+            )
+        if "database is locked" in msg or "database is busy" in msg:
+            return f"{path}: 数据库被其他进程占用，稍后重新保存检查即可。"
+        if "not a database" in msg or "malformed" in msg:
+            return (
+                f"{path}: 数据库文件损坏或不是 SQLite 库（{e}）。"
+                "请通过对应系统应用检查、备份和恢复，不要直接删除系统库。"
+            )
         return f"{path}: 路径权限看起来正常，但数据库探测失败（{e}）。"
     return ""
 
@@ -368,7 +427,42 @@ def _collect_external_db_access_warnings(raw_cfg: dict, events: list[str]) -> li
             if issue:
                 warnings.append(f"任务计划库: {issue}")
 
+    # 主日志库：除外部源外的大部分事件都依赖它；单独勾选外部源/巡检时不要求
+    external_only = {
+        *backup_events, *trimmedia_events, *trimactivity_events,
+        *photo_events, *scheduler_events, *docker_ev,
+        "NAS_PATROL_REPORT", "WAN_IP_CHANGED", "APP_START", "APP_STOP",
+    }
+    if (monitor_events - external_only) or as_bool(raw_cfg.get("media_lib_logger_enabled", False), False):
+        logger_db_path = (raw_cfg.get("logger_db_path") or "").strip()
+        if not logger_db_path:
+            warnings.append("主日志库: 未配置 logger_db_path，且自动探测未命中（一般事件将无数据来源）。")
+        else:
+            issue = _check_db_access_issue(
+                logger_db_path,
+                "SELECT id FROM log LIMIT 1",
+            )
+            if issue:
+                warnings.append(f"主日志库: {issue}")
+
+    # SSH journal：勾选 SSH 事件时检查读取链路（有界探测，不整卷 dump）
+    ssh_events = set(SSH_JOURNAL_EVENTS)
+    if monitor_events & ssh_events:
+        journal_warn = _ssh_journal_access_warning()
+        if journal_warn:
+            warnings.append(journal_warn)
+
     return warnings
+
+
+def _ssh_journal_access_warning() -> str:
+    """journal 读取链路探测：读取权限不足时给出组授权/挂载提示（详见 FAQ 第 10 条）。"""
+    try:
+        from monitor.patrol.probes import probe_journal_readability
+
+        return probe_journal_readability()
+    except Exception:
+        return ""
 
 
 def create_app(on_config_saved=None) -> Flask:
@@ -418,6 +512,13 @@ def create_app(on_config_saved=None) -> Flask:
         if path.startswith("/api/") or path in {"/", "/history", "/faq"}:
             resp.headers.setdefault("Cache-Control", "no-store, no-cache, must-revalidate")
             resp.headers.setdefault("Pragma", "no-cache")
+        # nosniff：防止上传/回显内容被浏览器嗅探成可执行类型（不设 X-Frame-Options：
+        # 配置页要嵌进飞牛桌面统一网关的 iframe，DENY 会直接弄坏应用窗口）
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("Referrer-Policy", "same-origin")
+        # 会话在写请求中被续期后刷新 cookie 的 max_age，滚动过期
+        if getattr(g, "refresh_auth_cookie", False) and _session_auth_active():
+            resp.set_cookie(AUTH_COOKIE_NAME, _get_session_id_from_cookie(), **_auth_cookie_kwargs())
         return resp
 
     CHANNEL_OPTIONS = [
@@ -436,6 +537,8 @@ def create_app(on_config_saved=None) -> Flask:
         "/api/auth/status",
         "/api/auth/login",
         "/api/auth/set-password",
+        "/api/auth/logout",
+        "/session-guard.js",
     }
     PUBLIC_PREFIXES = ("/assets/",)
 
@@ -460,6 +563,12 @@ def create_app(on_config_saved=None) -> Flask:
         if config_error:
             return jsonify(_config_load_error_payload(config_error)), 500
         if _is_authenticated():
+            # 写操作代表用户交互；统计、配置读取和身份轮询均不续期。
+            # 仅密码会话需要续期——网关管理员/关闭鉴权没有会话可续。
+            if request.method == "POST" and _session_auth_active():
+                if not _touch_session(_get_session_id_from_cookie(), SESSION_IDLE_SECONDS, scope=_auth_cookie_path()):
+                    return jsonify({"ok": False, "message": "会话已过期，请重新输入密码。"}), 401
+                g.refresh_auth_cookie = True
             return None
         if path.startswith("/api/"):
             return jsonify({
@@ -489,9 +598,39 @@ def create_app(on_config_saved=None) -> Flask:
             "authenticated": authenticated,
             "via_gateway": _gateway_identity() is not None,
             "password_min_length": PASSWORD_MIN_LENGTH,
+            "idle_seconds": SESSION_IDLE_SECONDS,
+            # 密码会话返回真实剩余时间；网关管理员/关闭鉴权不随空闲过期
+            "remaining_seconds": (
+                SESSION_IDLE_SECONDS
+                if not _session_auth_active()
+                else _session_remaining_seconds(_get_session_id_from_cookie(), SESSION_IDLE_SECONDS, scope=_auth_cookie_path())
+            ),
         })
 
+    @app.post("/api/auth/activity")
+    def auth_activity():
+        """前端仅在真实用户交互后调用；鉴权钩子已刷新活跃时间。"""
+        return jsonify({
+            "ok": True,
+            "authenticated": True,
+            "idle_seconds": SESSION_IDLE_SECONDS,
+            "remaining_seconds": _session_remaining_seconds(_get_session_id_from_cookie(), SESSION_IDLE_SECONDS, scope=_auth_cookie_path()),
+        })
+
+    @app.post("/api/auth/logout")
+    def auth_logout():
+        """删除服务端会话并清除 cookie（浏览器端由 session-guard.js 触发跳转）。"""
+        _delete_session(_get_session_id_from_cookie(), scope=_auth_cookie_path())
+        resp = jsonify({"ok": True})
+        resp.delete_cookie(AUTH_COOKIE_NAME, path=_auth_cookie_path(), secure=_session_cookie_secure(), httponly=True, samesite="Lax")
+        return resp
+
+    @app.get("/session-guard.js")
+    def session_guard_js():
+        return send_from_directory(str(_TEMPLATE_DIR.parent / "static"), "session-guard.js")
+
     @app.post("/api/auth/set-password")
+    @_config_transaction
     def auth_set_password():
         """首次设置密码：网关管理员/本机可直接设置，其余来源须提供初始化码。"""
         config_error = _current_config_load_error()
@@ -525,7 +664,9 @@ def create_app(on_config_saved=None) -> Flask:
             return jsonify({"ok": False, "message": f"保存失败：{e}"}), 500
         _setup_codes.clear()
         _login_limiter.reset(key)
-        session_id = _create_session()
+        # 换密码后作废旧会话再签发新的，旧 cookie 不能继续使用
+        _delete_session(_get_session_id_from_cookie(), scope=_auth_cookie_path())
+        session_id = _create_session(SESSION_IDLE_SECONDS, scope=_auth_cookie_path())
         resp = jsonify({"ok": True, "message": "密码设置成功。"})
         resp.set_cookie(AUTH_COOKIE_NAME, session_id, **_auth_cookie_kwargs())
         return resp
@@ -554,7 +695,8 @@ def create_app(on_config_saved=None) -> Flask:
             _login_limiter.record_failure(key)
             return jsonify({"ok": False, "message": "密码错误。"}), 401
         _login_limiter.reset(key)
-        session_id = _create_session()
+        _delete_session(_get_session_id_from_cookie(), scope=_auth_cookie_path())
+        session_id = _create_session(SESSION_IDLE_SECONDS, scope=_auth_cookie_path())
         resp = jsonify({"ok": True, "message": "登录成功。"})
         resp.set_cookie(AUTH_COOKIE_NAME, session_id, **_auth_cookie_kwargs())
         return resp
@@ -632,6 +774,7 @@ def create_app(on_config_saved=None) -> Flask:
         return jsonify({"ok": True, "data": data, "warnings": db_access_warnings})
 
     @app.post("/api/save-config")
+    @_config_transaction
     def save_config():
         payload = request.get_json(silent=True) or {}
 
@@ -964,36 +1107,23 @@ def _serve_forever(server, name: str) -> threading.Thread:
     return thread
 
 
-def start_ui_server_in_background(on_config_saved=None):
-    """在后台线程启动配置 UI 服务。on_config_saved: 保存配置成功后的回调（热加载用）。
-
-    - TCP：UI_HOST（默认 0.0.0.0）/ UI_PORT（默认 18080）；剥离客户端自带的 X-Trim-* 头。
-    - 统一网关：设置 FNMB_GATEWAY_SOCKET 时额外监听该 Unix Socket，前缀取 FNMB_GATEWAY_PREFIX。
-    """
-    from werkzeug.serving import make_server
-
-    app = create_app(on_config_saved=on_config_saved)
+def start_ui_supervisor(on_config_saved=None) -> "UIServerSupervisor":
+    """以监督方式启动配置 UI：TCP 与统一网关 Socket 两个入口分别监听、
+    各自失败后自动重试（5 秒），某个入口的临时故障不会让后台永久不可用。
+    返回的句柄带 stop()，供应用关停时先停 Web 再落盘。"""
     host = (os.getenv("UI_HOST") or "0.0.0.0").strip() or "0.0.0.0"
-    port = int(os.getenv("UI_PORT", "18080"))
-
-    tcp_server = make_server(host, port, StripGatewayHeadersMiddleware(app.wsgi_app), threaded=True)
-    print(f"配置 UI 监听 http://{host}:{port}")
-    thread = _serve_forever(tcp_server, "FnMessageBots-UI")
-
+    port = (os.getenv("UI_PORT") or "18080").strip() or "18080"
     sock_path = (os.getenv("FNMB_GATEWAY_SOCKET") or "").strip()
-    if sock_path:
-        prefix = (os.getenv("FNMB_GATEWAY_PREFIX") or "").strip()
-        try:
-            if os.path.exists(sock_path):
-                os.unlink(sock_path)
-            gw_server = make_server(
-                f"unix://{sock_path}", 0, GatewayPrefixMiddleware(app.wsgi_app, prefix), threaded=True
-            )
-            print(f"统一网关 Socket 已监听：{sock_path}（前缀 {prefix or '/'}）")
-            _serve_forever(gw_server, "FnMessageBots-Gateway")
-        except Exception as e:
-            print(f"统一网关 Socket 监听失败（{e}），仅提供 TCP 访问")
-    return thread
+    prefix = (os.getenv("FNMB_GATEWAY_PREFIX") or "").strip()
+    from web.server_lifecycle import UIServerSupervisor
+
+    return UIServerSupervisor(
+        app_factory=lambda: create_app(on_config_saved=on_config_saved),
+        host=host,
+        port=port,
+        socket_path=sock_path,
+        gateway_prefix=prefix,
+    ).start()
 
 
 if __name__ == "__main__":

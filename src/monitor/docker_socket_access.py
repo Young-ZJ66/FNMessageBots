@@ -52,6 +52,8 @@ def check_docker_socket_access(sock_path: str) -> Optional[str]:
         )
     except PermissionError:
         return f"Docker：无法访问 {sp}（stat 被拒绝）。{faq}"
+    except OSError as exc:
+        return f"Docker：无法检查 {sp}（{exc}）。{faq}"
 
     if not stat_mod.S_ISSOCK(st.st_mode):
         return (

@@ -261,6 +261,18 @@ PYTHONPATH=. LOGGER_DB_PATH=./logger_data.db3 WECHAT_WEBHOOK_URL=xxx python3 src
 
 运行测试：`python tests/run_all.py`（详见 [tests/README.md](tests/README.md)）。
 
+## FPK 原生应用打包
+
+`fpk/` 是飞牛 FPK 安装包脚手架（Docker 型：安装即创建容器，镜像取自本仓库 GHCR），构建在独立临时目录完成：
+
+```bash
+python scripts/build-fpk.py                                  # 产物 dist/FnMessageBot-<版本>.fpk
+python scripts/verify-fpk.py dist/FnMessageBot-<版本>.fpk    # 校验包内容
+```
+
+- 服务端口固定 18230（manifest 的 `service_port` 与桌面入口共同约定）；安装向导只采集访问密码（PBKDF2 落盘，明文不保存）。
+- native 型脚手架已归档在仓库外（`fnmb-archive/fpk-native`），可用 `python scripts/build-fpk.py --scaffold <目录>` 出 native 包（产物带 `-native` 后缀）。
+
 ## 从 2.6.x 升级到 2.7+
 
 2.7.0 起推送渠道收敛为**企业微信、钉钉、飞书、通用 Webhook** 四个，升级前请确认：
@@ -287,7 +299,7 @@ PYTHONPATH=. LOGGER_DB_PATH=./logger_data.db3 WECHAT_WEBHOOK_URL=xxx python3 src
 - **影视入库一条一条刷屏**：确认「影视/相册事件聚合推送」已开启（默认开启）并按需调整 `media_batch_window` 静默窗口。
 - **时间不对**：调整 `LOGTIME_DISPLAY_OFFSET_SECONDS`（默认已为 +8 小时）。
 - **重复通知**：调大 `dedup_window`（秒）。
-- **Web 配置页打不开**：确认端口映射与防火墙；容器内可设 `UI_PORT` 并与 `ports` 一致。
+- **Web 配置页打不开**：确认端口映射与防火墙；容器内可设 `UI_PORT` 并与 `ports` 一致。监听失败或 Web 服务线程退出后，监督线程每 5 秒自动恢复并写 monitor_*.log（每分钟至多一条）；容器健康检查（/healthz）验证进程与配置 UI 均正常。反代部署下限流按直连 IP 统计，可在 compose 设 `FNMB_TRUSTED_PROXIES`（逗号分隔可信网段）按真实来源限流。
 - **忘记 Web 密码**：在可信环境下编辑 `config.json`，删除 `web_password_salt` 与 `web_password_hash` 后重启，再用日志或 `config/.setup_code` 中的初始化码重新设置密码。
 - **改了代码但行为没变**：确认 NAS 拉到的是新镜像（`docker compose pull` 后再 `up -d`；本地构建需 `--build`）。用 `docker inspect <容器> --format '{{.Image}}'` 对比镜像 ID。
 

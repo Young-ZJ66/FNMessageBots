@@ -39,11 +39,13 @@ from monitor.wan_ip_monitor import start_wan_ip_monitor_thread
 from monitor.ssh_journal_poller import SSH_JOURNAL_EVENTS, SshJournalPoller
 from monitor.sqlite_uri import probe_readonly_sqlite
 from notifier.unified_notifier import UnifiedNotifier
-from web.ui_app import start_ui_server_in_background
 
 # 仅当 monitor_events 包含对应事件时才轮询各库（避免空跑）
 TRIMMEDIA_POLL_EVENTS = frozenset({"TRIM_RESOURCE_ADDED", "TRIM_SCRAPE_SUCCESS", "TRIM_RESOURCE_DELETED"})
 TRIMACTIVITY_POLL_EVENTS = frozenset({"MEDIA_LOGIN_SUCC", "MEDIA_LOGOUT"})
+
+# 热加载互斥：保存回调与巡检线程/关停并发时避免半更新状态
+_reload_lock = threading.RLock()
 
 # 聚合推送只针对高频同质的批量事件：
 # - 影视批量刮削入库/刮削/删除（外部库轮询）
@@ -718,6 +720,11 @@ class Application:
             )
 
     def reload_config(self) -> None:
+        """保存配置后热加载（互斥锁：与关停/巡检线程并发时避免半更新状态）。"""
+        with _reload_lock:
+            self._reload_config_locked()
+
+    def _reload_config_locked(self) -> None:
         """保存配置后热加载：从配置文件重新加载并更新通知器与轮询器，无需重启容器。"""
         from web.ui_app import CONFIG_FILE
         if not self.config:
@@ -805,8 +812,12 @@ class Application:
             self.running = True
 
             try:
-                start_ui_server_in_background(on_config_saved=self.reload_config)
+                from web.ui_app import start_ui_supervisor
+
+                self._ui_server = start_ui_supervisor(on_config_saved=self.reload_config)
             except Exception as e:
+                if getattr(self, "logger", None):
+                    self.logger.exception("配置 UI 启动失败: %s", e)
                 print(f"配置 UI 启动失败: {e}")
             try:
                 from web.ui_app import set_runtime_monitor_app
@@ -993,6 +1004,13 @@ class Application:
     def shutdown(self):
         """关闭应用"""
         print("\n正在关闭应用...")
+        # 先停 Web 入口：关停窗口内不再接受新的配置保存
+        ui_server = getattr(self, "_ui_server", None)
+        if ui_server is not None:
+            try:
+                ui_server.stop()
+            except Exception:
+                pass
         self._stop_unified_batch_flush_thread()
         self._flush_unified_batch_pending_only(force=True)
 

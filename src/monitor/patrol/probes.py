@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -120,6 +121,36 @@ def _run_smart_probe(args: List[str], timeout: float) -> str:
         shell=False,
     )
     return (p.stdout or "") + (p.stderr or "")
+
+
+def probe_journal_readability() -> str:
+    """journal 读取链路探测（配置保存时调用，有界：只读 1 条，不整卷 dump）。
+
+    返回给用户的告警文本；链路正常或环境无 journalctl 时返回空串。
+    判据与 SSH journal 轮询器一致：必须真的读出带游标的条目才算可用。
+    注意：本探测不带 --directory 定制（轮询器支持 SSH_JOURNAL_DIRECTORY 环境变量），
+    定制了目录且默认路径读不到的场景会误报——以「立即巡检」结果为准。
+    """
+    if not shutil.which("journalctl"):
+        return ""
+    try:
+        out = _run_smart_probe(["journalctl", "--system", "--no-pager", "-n", "1", "--show-cursor"], timeout=5.0)
+    except Exception:
+        return ""
+    if out and "-- cursor:" in out:
+        return ""
+    reason = (out or "").strip()[:200] or "读不到带游标的条目"
+    if Path("/.dockerenv").exists():
+        hint = (
+            "Docker 部署：在 compose 挂载宿主 journal 目录与 /etc/machine-id；"
+            "非 root 容器还需把宿主 systemd-journal 组加入 group_add 后重建容器。"
+        )
+    else:
+        hint = "native 部署：把应用账号加入 systemd-journal 组，然后在应用中心停止并重新启动应用。"
+    return (
+        "SSH journal: 当前账号读不到系统 journal（" + reason + "）。" + hint + " "
+        "具体命令见配置页常见问题第 10 条。"
+    )
 
 
 def _run_cmd_any(candidates: List[List[str]], timeout: float = 2.0) -> str:
@@ -249,31 +280,63 @@ def _fmt_boot_time(ts: float) -> str:
 
 
 def _pick_lan_ip() -> str:
+    """优先使用默认路由上的活动网卡，桥接容器可显式指定 NAS_LAN_IP。"""
+    override = (os.getenv("NAS_LAN_IP") or "").strip()
+    if override:
+        try:
+            addr = ipaddress.IPv4Address(override)
+            # 内网语义从严：拒绝 loopback/link-local/未指定/组播与公网地址
+            if (
+                not (addr.is_loopback or addr.is_link_local or addr.is_unspecified or addr.is_multicast)
+                and addr.is_private
+            ):
+                return str(addr)
+        except ValueError:
+            pass
+        logging.getLogger(__name__).warning("NAS_LAN_IP 不是有效的内网 IPv4，已忽略")
     if not psutil:
         return "--"
     try:
-        for _name, addrs in psutil.net_if_addrs().items():
+        interfaces = psutil.net_if_addrs()
+        stats = psutil.net_if_stats()
+        default_interface = _default_ipv4_interface()
+        candidates: List[Tuple[int, int, str, str]] = []
+        for name, addrs in interfaces.items():
+            if re.match(r"^(lo$|docker|br-|virbr|veth|cni|flannel|tun|tap|wg|tailscale|zt)", name):
+                continue
+            if name in stats and not stats[name].isup:
+                continue
             for a in addrs:
                 if getattr(a, "family", None) != socket.AF_INET:
                     continue
                 ip = str(getattr(a, "address", "") or "").strip()
-                if not ip or ip.startswith("127."):
-                    continue
                 try:
-                    obj = ipaddress.ip_address(ip)
+                    obj = ipaddress.IPv4Address(ip)
                 except ValueError:
                     continue
-                if obj.is_private:
-                    return ip
-        for _name, addrs in psutil.net_if_addrs().items():
-            for a in addrs:
-                if getattr(a, "family", None) == socket.AF_INET:
-                    ip = str(getattr(a, "address", "") or "").strip()
-                    if ip and not ip.startswith("127."):
-                        return ip
-    except Exception:
+                if obj.is_loopback or obj.is_link_local or obj.is_unspecified or obj.is_multicast:
+                    continue
+                # 默认路由上的网卡优先，其次私网地址（避免选中 docker0 的 172.x）
+                candidates.append((0 if name == default_interface else 1, 0 if obj.is_private else 1, name, ip))
+        if candidates:
+            return min(candidates)[3]
+    except Exception as e:
+        logging.getLogger(__name__).warning("内网 IP 检测失败: %s", e)
         return "--"
     return "--"
+
+
+def _default_ipv4_interface() -> str:
+    """读取 Linux 默认路由，多个出口时选 UP 且 metric 最低的一项。"""
+    routes: List[Tuple[int, str]] = []
+    try:
+        for line in Path("/proc/net/route").read_text(encoding="utf-8").splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 8 and parts[1] == "00000000" and int(parts[3], 16) & 1:
+                routes.append((int(parts[6]), parts[0]))
+    except (OSError, ValueError):
+        pass
+    return min(routes)[1] if routes else ""
 
 
 def _http_get_ip(url: str, *, family: int, timeout: float = 3.0) -> str:
@@ -336,10 +399,24 @@ def _http_get_ip(url: str, *, family: int, timeout: float = 3.0) -> str:
     return ""
 
 
+def _is_global_ip(text: str, version: int) -> bool:
+    """外网 IP 有效性：版本匹配且是全局地址（拒绝私网/环回/链路本地/组播）。"""
+    try:
+        obj = ipaddress.ip_address((text or "").strip())
+    except ValueError:
+        return False
+    if obj.version != version:
+        return False
+    if obj.is_multicast or obj.is_loopback or obj.is_link_local or obj.is_unspecified:
+        return False
+    return obj.is_global
+
+
 def _pick_wan_ip() -> str:
     """优先拿到 IPv4；仅当 IPv4 全部失败时才用 IPv6。
 
     避免偶发 IPv4 超时回退到 IPv6、下次又拿到 IPv4，导致通知在 v4/v6 间来回刷。
+    结果必须是全局地址：错误页/门户页里出现的私网地址不能进基线。
     """
     v4_urls = (
         "https://api4.ipify.org",
@@ -353,9 +430,8 @@ def _pick_wan_ip() -> str:
         for u in v4_urls:
             try:
                 text = _http_get_ip(u, family=socket.AF_INET, timeout=3.0)
-                ip_obj = ipaddress.ip_address(text)
-                if ip_obj.version == 4:
-                    return text
+                if _is_global_ip(text, 4):
+                    return text.strip()
             except Exception:
                 continue
         if round_i == 0:
@@ -370,19 +446,35 @@ def _pick_wan_ip() -> str:
     for u in v6_urls:
         try:
             text = _http_get_ip(u, family=socket.AF_INET6, timeout=3.0)
-            ipaddress.ip_address(text)
-            return text
+            if _is_global_ip(text, 6):
+                return text.strip()
         except Exception:
             continue
     return "--"
 
 
 def _read_system_version() -> str:
-    # 系统版本（操作系统）
-    out = _run_cmd(["sh", "-lc", "grep PRETTY_NAME /etc/os-release | cut -d '\"' -f2"], timeout=3.0)
-    ver = str(out or "").strip().splitlines()
-    if ver and ver[0].strip():
-        return ver[0].strip()
+    """读取宿主机 OS；容器中缺少宿主挂载时不使用镜像自身的 Debian 版本。"""
+    paths = ["/host/etc/os-release", "/rootfs/etc/os-release", "/mnt/host/etc/os-release"]
+    if not Path("/.dockerenv").exists() and not Path("/run/.containerenv").exists():
+        paths.extend(["/etc/os-release", "/usr/lib/os-release"])
+    for filename in paths:
+        try:
+            values = {}
+            for line in Path(filename).read_text(encoding="utf-8").splitlines():
+                key, sep, value = line.partition("=")
+                if sep:
+                    values[key.strip()] = value.strip().strip("\"'")
+            version = values.get("PRETTY_NAME") or " ".join(
+                v for v in (values.get("NAME"), values.get("VERSION_ID")) if v
+            )
+            if version:
+                return version[:160]
+        except (OSError, UnicodeError):
+            continue
+    logging.getLogger(__name__).warning(
+        "未读到宿主系统版本：Docker 请只读挂载 /etc/os-release 到 /host/etc/os-release"
+    )
     return "--"
 
 
@@ -590,7 +682,11 @@ def _read_hostname(logger_db_hostname: str = "") -> str:
 
 
 def _read_fnos_version(logger_db_fnos: str = "") -> str:
-    """飞牛版本：优先开放 API / TRIM_SYS_VERSION，再回退本地探测（手装 Docker 等环境）。"""
+    """飞牛版本：优先开放 API / TRIM_SYS_VERSION，再回退本地探测（手装 Docker 等环境）。
+
+    当前宿主的版本文件/包信息优先于历史日志——旧事件里的版本号可能早已过期；
+    只有日志来源且无法净化确认时才打 warning 并弃用。
+    """
     try:
         from utils.fnos_platform import resolve_fnos_version_via_api
 
@@ -600,9 +696,6 @@ def _read_fnos_version(logger_db_fnos: str = "") -> str:
     except Exception:
         pass
 
-    vlog = (logger_db_fnos or "").strip()
-    if vlog:
-        return vlog[:160]
     for rel in (
         "/etc/fnos-release",
         "/etc/fnos_version",
@@ -616,8 +709,10 @@ def _read_fnos_version(logger_db_fnos: str = "") -> str:
             if not p.is_file():
                 continue
             lines = p.read_text(encoding="utf-8", errors="ignore").strip().splitlines()
-            if lines and lines[0].strip():
-                return lines[0].strip()[:160]
+            if lines:
+                version = _sanitize_fnos_version_candidate(lines[0])
+                if version:
+                    return version
         except Exception:
             continue
 
@@ -641,7 +736,18 @@ def _read_fnos_version(logger_db_fnos: str = "") -> str:
             continue
         if low.startswith("e:"):
             continue
-        return _format_fnos_version_display(raw)
+        version = _sanitize_fnos_version_candidate(raw)
+        if version:
+            return _format_fnos_version_display(version)
+
+    version = _sanitize_fnos_version_candidate(logger_db_fnos)
+    if version:
+        logging.getLogger(__name__).warning(
+            "忽略历史日志中的飞牛版本，无法确认是否为当前版本: %s", version
+        )
+    logging.getLogger(__name__).warning(
+        "未读到飞牛版本：请检查开放 API、TRIM_SYS_VERSION 或宿主 dpkg status 挂载"
+    )
     return "--"
 
 
