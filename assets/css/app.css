@@ -659,6 +659,19 @@
       white-space: pre-wrap;
       word-break: break-all; }
 
+#smart-auth-cmds { margin: 8px 0 0;
+      padding: 10px 12px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background: var(--border-translucent);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-width: 100%; }
+
 [data-page="faq"] .btn { min-width: 96px;
       border-radius: 999px;
       padding: 8px 20px;

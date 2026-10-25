@@ -72,6 +72,16 @@ async function loadConfig() {
     // 再由选项生成隐藏字段 #input-nas-patrol-cron 的值（保存时读它）。
     initPatrolSchedule(data.nas_patrol_cron || "0 12 * * *");
 
+    // SMART 授权命令：按当前系统实际设备生成；最近一轮巡检有盘温未取得时自动展开
+    const saCmds = document.getElementById("smart-auth-cmds");
+    if (saCmds) saCmds.textContent = data.smart_auth_commands || "";
+    const saRow = document.getElementById("smart-auth-row");
+    if (saRow) saRow.hidden = !data.smart_auth_needed;
+    const saToggle = document.getElementById("smart-auth-toggle-btn");
+    if (saToggle) saToggle.onclick = function() {
+      if (saRow) saRow.hidden = !saRow.hidden;
+    };
+
     // 配置已从服务端加载成功即可测推送，不必再次点「保存配置」。
     testBtn.disabled = false;
     setStatus(false, "");

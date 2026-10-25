@@ -32,13 +32,21 @@ from .probes import (
 
 
 
-# 盘温/健康读取失败时的提示（写入推送记录详情，指引用户执行对应动作）
+# 盘温/健康读取失败时的提示（写入推送记录详情，指引用户执行对应动作；
+# 具体到设备的授权命令由 web.smart_auth 按当前系统生成）
 _SMART_UNAVAILABLE_HINT = (
     "未取得 SMART 数据：native 部署请在宿主机执行 SMART 授权——"
     "sudo setcap cap_sys_rawio,cap_sys_admin+ep $(command -v smartctl) 与 "
     "sudo setfacl -m u:FnMessageBot:r /dev/sdX（设备按实际替换，重启后需重授权）；"
-    "容器部署需在 compose 映射盘设备并重建容器"
+    "容器部署需在 compose 映射盘设备并重建容器；"
+    "完整命令见配置页「SMART 授权命令」或常见问题页"
 )
+
+# 运行期标记（monitor.patrol.smart_auth 读取，配置页据此展示授权命令）：
+# SAT_FALLBACK_USED——-d sat 回退拿到过数据（该机需要 -d sat）；
+# SMART_AUTH_NEEDED——最近一轮巡检存在温度未取得的盘
+SAT_FALLBACK_USED = False
+SMART_AUTH_NEEDED = False
 
 
 def _normalize_block_name(name: str) -> str:
@@ -398,6 +406,7 @@ def _patrol_readable_unresolved_device_label(dev_path: str, mount: str) -> str:
 
 def _smart_health_for_block_path(block_path: str) -> str:
     """对 ``/dev/...`` 绝对路径做 SMART 健康判断（含 mapper、分区）。"""
+    global SAT_FALLBACK_USED
     bp = str(block_path or "").strip()
     if not bp.startswith("/dev/"):
         return "--"
@@ -414,6 +423,8 @@ def _smart_health_for_block_path(block_path: str) -> str:
         if not out:
             continue
         low = out.lower()
+        if extra and "test result" in low:
+            SAT_FALLBACK_USED = True
         if "test result: passed" in low or "smart overall-health self-assessment test result: passed" in low:
             return "健康"
         fail_markers = (
@@ -736,6 +747,7 @@ def _hwmon_temp1_for_block(nb: str) -> str:
 
 
 def _smart_temp_for_block_path(block_path: str) -> str:
+    global SAT_FALLBACK_USED
     bp = str(block_path or "").strip()
     if not bp.startswith("/dev/"):
         return "--"
@@ -757,6 +769,8 @@ def _smart_temp_for_block_path(block_path: str) -> str:
         except Exception:
             continue
         if parsed not in {"--", "—"}:
+            if extra:
+                SAT_FALLBACK_USED = True
             return parsed
 
     # 2) smartctl 文本
@@ -766,6 +780,8 @@ def _smart_temp_for_block_path(block_path: str) -> str:
             continue
         parsed = _parse_celsius_from_smartctl_text(out)
         if parsed not in {"--", "—"}:
+            if extra:
+                SAT_FALLBACK_USED = True
             return parsed
 
     # 3) nvme-cli：主温度 / sensor1，不用 sensor2
@@ -1889,6 +1905,7 @@ def _collect_disk_items() -> List[Dict[str, str]]:
     与上游一致不使用 -n standby——部分 SAT 层对节能态查询恒报低功耗）；
     剩余空间仍尽量从关联的 /vol 挂载反查（有则填，无则 --）。
     """
+    global SMART_AUTH_NEEDED
     items: List[Dict[str, str]] = []
     vol_space_by_physical = _patrol_scan_vol_space_by_physical()
     whole_disks = _patrol_list_visible_whole_disks()
@@ -1940,6 +1957,7 @@ def _collect_disk_items() -> List[Dict[str, str]]:
 
     for idx, row in enumerate(items, start=1):
         row["name"] = f"硬盘{idx}"
+    SMART_AUTH_NEEDED = any(it["temp_c"] == "--" for it in items)
     return items
 
 

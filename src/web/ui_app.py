@@ -55,6 +55,16 @@ from web.config_store import restore_masked_channels as _restore_masked_channels
 # 运行中的主监控应用，供「立即巡检」等接口使用
 _runtime_monitor_app = None
 
+
+def _smart_auth_state():
+    """SMART 授权命令与展示标记（按当前系统实际设备生成）；巡检模块不可用时静默降级。"""
+    try:
+        from monitor.patrol.smart_auth import auth_needed, generate_auth_commands
+
+        return {"needed": auth_needed(), "commands": generate_auth_commands()}
+    except Exception:
+        return {"needed": False, "commands": ""}
+
 # 内置测试消息：Web 页「发送测试消息」一键发送，无需用户输入内容
 BUILT_IN_TEST_MESSAGE = "FnMessageBot 测试推送。收到本条即说明渠道配置与网络可用；实际推送样式以真实事件为准。"
 
@@ -609,6 +619,8 @@ def create_app(on_config_saved=None) -> Flask:
             "ssh_ignore_loopback": as_bool(raw.get("ssh_ignore_loopback", False), False),
             "nas_patrol_enabled": as_bool(raw.get("nas_patrol_enabled", False), False),
             "nas_patrol_cron": _cron,
+            "smart_auth_needed": _smart_auth_state()["needed"],
+            "smart_auth_commands": _smart_auth_state()["commands"],
             "channel_options": CHANNEL_OPTIONS,
         }
         db_access_warnings = _collect_external_db_access_warnings(raw, monitor_events)
@@ -905,13 +917,23 @@ def create_app(on_config_saved=None) -> Flask:
 
     @app.get("/faq")
     def faq_page():
-        """常见问题页。"""
+        """常见问题页。SMART 授权命令按当前系统实际设备动态生成。"""
+        try:
+            from monitor.patrol.smart_auth import generate_auth_commands, is_container_mode
+
+            smart_auth_commands = generate_auth_commands()
+            smart_is_container = is_container_mode()
+        except Exception:
+            smart_auth_commands = ""
+            smart_is_container = False
         return render_template(
             "faq.html",
             favicon_url=favicon_url,
             repo_url=PROJECT_REPO_URL,
             docs_url=PROJECT_DOCS_URL,
             footer_text=FOOTER_TEXT,
+            smart_auth_commands=smart_auth_commands,
+            smart_is_container=smart_is_container,
         )
 
     @app.get("/")

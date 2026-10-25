@@ -156,13 +156,15 @@ sudo -u FnMessageBot test -r /var/run/docker.sock -a -w /var/run/docker.sock &am
 
           <article class="faq-item">
             <h2>14. 升级后「魔法推送」「企业微信应用」渠道不见了，原配置还在吗</h2>
-            <p>这两个渠道已从本项目中移除，<strong>只保留个人可自助开通的常用渠道</strong>（企业微信/钉钉/飞书群机器人、Bark、PushPlus、SMTP 邮件、通用 Webhook、MeoW）。</p>
-            <p><strong>你原来的配置不会被删除</strong>，会一直留在 <code>config.json</code> 里；程序启动时会忽略它们并在日志中提示一行，不会报错。想清理的话手动删掉 <code>magic_push_params</code> / <code>wecom_app_params</code> 两个键即可。</p>
-            <p>若仍需这两个渠道：</p>
-            <ul>
-              <li><strong>魔法推送</strong>：它本质是 HTTP 接口。用「通用 Webhook」填 <code>http://魔法推送地址/api/push/你的Token</code>，请求方式 <code>POST</code>、内容类型 <code>json</code>、请求体 <code>{"title":"{title}","content":"{content}","type":"text"}</code> 即可。</li>
-              <li><strong>企业微信应用</strong>：需企业微信管理员创建自建应用，并受「企业可信IP」限制。若只需群内通知，直接用「企业微信」群机器人 Webhook，不受可信 IP 限制。</li>
-            </ul>
+            <p>2.7.0 起推送渠道收敛为<strong>企业微信、钉钉、飞书、通用 Webhook</strong> 四个，「魔法推送」「企业微信应用」等已移除。若仍需要：魔法推送本质是 HTTP 接口，可用「通用 Webhook」填 <code>http://魔法推送地址/api/push/你的Token</code>，请求方式 <code>POST</code>、内容类型 <code>json</code>、请求体 <code>{"title":"{title}","content":"{content}","type":"text"}</code>。</p>
+            <p>旧渠道的残留配置键会被忽略并在启动日志中提示「可安全删除」；下次保存配置时自动从 config.json 清理。</p>
+          </article>
+
+          <article class="faq-item">
+            <h2>15. 巡检的温度 / 健康为 --（SMART 授权）</h2>
+            <p>native 部署需要给应用账号开 SMART 访问（飞牛托管的普通账号权限有限，只加 disk 组不能保证生效）。以下命令已按<strong>当前系统实际设备与账号</strong>生成，复制到 NAS SSH 用管理员账号执行即可：</p>
+            <pre class="faq-pre">{{ smart_auth_commands }}</pre>
+            <p>{% if smart_is_container %}当前为容器运行：容器内看不到宿主块设备，请把上方映射加入宿主机 compose 的 devices 段后重建容器（容器内 smartctl 为 root 权限，无需 setcap/setfacl）。{% else %}授权后通常无需重启应用，回配置页点「立即巡检一次」验证；部分 SAT 转换层设备自动探测失败时程序会自动以 -d sat 重试。设备节点重启后会重建，需重跑 setfacl（升级应用时会自动重授）。{% endif %}</p>
           </article>
         </section>
 

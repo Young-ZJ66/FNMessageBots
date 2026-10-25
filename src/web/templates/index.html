@@ -445,8 +445,18 @@
             <input type="hidden" id="input-nas-patrol-cron" value="0 12 * * *" />
             <div class="patrol-summary" id="patrol-summary"></div>
 
+            <!-- SMART 授权命令：按当前系统实际设备生成；巡检修到温度读不到时自动展开 -->
+            <div class="setting-row" id="smart-auth-row" hidden>
+              <div class="setting-label">
+                <span class="setting-name">SMART 授权命令</span>
+                <div class="field-helper">检测到部分硬盘的温度未能读取。复制以下命令到 NAS SSH 用管理员账号执行，完成后点「立即巡检一次」验证；重启 NAS 后需重跑（升级应用会自动重授）。</div>
+              </div>
+              <div class="setting-control"><pre id="smart-auth-cmds"></pre></div>
+            </div>
+
             <div class="footer-actions">
               <button class="btn btn-ghost" id="nas-patrol-run-btn" type="button">立即巡检一次</button>
+              <button class="btn btn-ghost" id="smart-auth-toggle-btn" type="button">SMART 授权命令</button>
             </div>
           </div>
         </section>
