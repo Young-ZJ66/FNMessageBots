@@ -8,9 +8,13 @@
 用法（项目根目录）：
     python scripts/build-fpk.py                    # 自动探测 .fnpack/ 下的 fnpack
     python scripts/build-fpk.py --fnpack /path/to/fnpack
+    python scripts/build-fpk.py --scaffold ../fnmb-archive/fpk-native   # 用仓库外脚手架
     python scripts/build-fpk.py --keep             # 保留临时目录便于排查
 
-产物：dist/FnMessageBot-<version>.fpk（+ .sha256 校验文件）
+产物（按脚手架形态命名，避免同版本两形态互相覆盖）：
+    dist/FnMessageBot-<version>.fpk          # Docker 型
+    dist/FnMessageBot-<version>-native.fpk   # native 型
+均附 .sha256 校验文件。
 """
 
 from __future__ import annotations
@@ -66,8 +70,8 @@ def find_fnpack(explicit: str | None) -> str:
     raise SystemExit("错误: 未找到 fnpack（可用 --fnpack 指定路径，或放入 .fnpack/ 目录）")
 
 
-def read_version() -> str:
-    manifest = (FPK_DIR / "manifest").read_text(encoding="utf-8")
+def read_version(scaffold: Path) -> str:
+    manifest = (scaffold / "manifest").read_text(encoding="utf-8")
     m = re.search(r"^version\s*=\s*(\S+)\s*$", manifest, re.M)
     if not m:
         raise SystemExit("错误: fpk/manifest 中未找到 version")
@@ -92,15 +96,20 @@ def copy_tree(src: Path, dst: Path, *, excludes: set[str] = CODE_EXCLUDES) -> No
             shutil.copy2(item, target)
 
 
-def build_payload(payload: Path) -> Path:
-    """组装 payload，按 fpk/ 的形态自动分流：
+def detect_form(scaffold: Path) -> str:
+    """native 型：脚手架内嵌 cmd/fnmessagebots/（构建时填充主仓库代码）；
+    否则为 Docker 型（应用代码在 GHCR 镜像内）。"""
+    return "native" if (scaffold / "cmd" / "fnmessagebots").is_dir() else "docker"
 
-    - Docker 型（有 app/docker/docker-compose.yaml）：脚手架原样，应用代码
-      在 GHCR 镜像内，包不带 src。
-    - Native 型（有 cmd/fnmessagebots/）：脚手架 + 顶层 src/assets/requirements
-      填充进 cmd/fnmessagebots/（构建时以主仓库为准覆盖包内模板）。
+
+def build_payload(payload: Path, scaffold: Path) -> Path:
+    """组装 payload，按脚手架形态自动分流：
+
+    - Docker 型：脚手架原样，应用代码在 GHCR 镜像内，包不带 src。
+    - native 型：脚手架 + 顶层 src/assets/requirements 填充进
+      cmd/fnmessagebots/（构建时以主仓库为准覆盖包内模板）。
     """
-    copy_tree(FPK_DIR, payload, excludes=CODE_EXCLUDES)
+    copy_tree(scaffold, payload, excludes=CODE_EXCLUDES)
     gi = payload / ".gitignore"
     if gi.exists():
         gi.unlink()
@@ -109,9 +118,11 @@ def build_payload(payload: Path) -> Path:
     if not code_dir.is_dir():
         return payload  # Docker 型：无内嵌代码
 
-    # Native 型：src/assets/requirements 以主仓库当前版本为准
+    # native 型：src/assets/requirements 以主仓库当前版本为准；
+    # assets 先清掉脚手架模板，保证包内与主仓库逐字节一致
     (code_dir / "src").mkdir(parents=True, exist_ok=True)
     copy_tree(ROOT / "src", code_dir / "src")
+    shutil.rmtree(code_dir / "assets", ignore_errors=True)
     copy_tree(ROOT / "assets", code_dir / "assets")
     shutil.copy2(ROOT / "requirements.txt", code_dir / "requirements.txt")
     junk = code_dir / "data"
@@ -153,13 +164,20 @@ def run_fnpack(fnpack: str, payload: Path, build_dir: Path) -> Path:
 def main() -> None:
     ap = argparse.ArgumentParser(description="构建 FnMessageBot FPK 安装包")
     ap.add_argument("--fnpack", help="fnpack 可执行文件路径（默认自动探测 .fnpack/ 与 PATH）")
+    ap.add_argument("--scaffold", help="脚手架目录（默认仓库 fpk/；native 归档可用 ../fnmb-archive/fpk-native）")
     ap.add_argument("--keep", action="store_true", help="保留临时构建目录（排查用）")
     args = ap.parse_args()
 
+    scaffold = Path(args.scaffold).resolve() if args.scaffold else FPK_DIR
+    if not (scaffold / "manifest").is_file():
+        raise SystemExit(f"错误: 脚手架缺少 manifest: {scaffold}")
+    form = detect_form(scaffold)
+
     fnpack = find_fnpack(args.fnpack)
-    version = read_version()
-    print(f"fnpack : {fnpack}")
-    print(f"version: {version}")
+    version = read_version(scaffold)
+    print(f"fnpack  : {fnpack}")
+    print(f"scaffold: {scaffold}（{form} 型）")
+    print(f"version : {version}")
 
     # fnpack(1.2.3) 在部分系统的用户 Temp（C:\Users\...\Temp）下创建子目录会被
     # ACL 拒绝，且会把 TMP 里的 `\字母` 当转义吞掉；构建目录固定放在项目 dist/
@@ -169,11 +187,13 @@ def main() -> None:
     payload = build_dir / "payload"
     payload.mkdir(parents=True)
     try:
-        build_payload(payload)
+        build_payload(payload, scaffold)
         pkg = run_fnpack(fnpack, payload, build_dir)
 
         DIST.mkdir(exist_ok=True)
-        out = DIST / f"FnMessageBot-{version}.fpk"
+        # 同版本两种形态会同时存在，产物必须按形态区分，否则互相覆盖
+        out_name = f"FnMessageBot-{version}.fpk" if form == "docker" else f"FnMessageBot-{version}-native.fpk"
+        out = DIST / out_name
         shutil.move(str(pkg), out)
         digest = hashlib.sha256(out.read_bytes()).hexdigest()
         (Path(str(out) + ".sha256")).write_text(f"{digest}  {out.name}\n", encoding="utf-8")
