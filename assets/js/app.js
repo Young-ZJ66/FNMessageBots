@@ -8,6 +8,35 @@
    脚本按模板中 <script src> 的顺序执行。
    ========================================================================== */
 
+// SMART 授权命令文本：后端只下发结构化数据（设备/账号/工具完整路径），
+// 展示用命令在此拼装，复制到 NAS SSH 由管理员执行
+function buildSmartAuthText(sa) {
+  if (!sa || !Array.isArray(sa.devices) || !sa.devices.length) return "";
+  if (sa.mode === "container") {
+    const maps = sa.devices.map(d => "      - " + d + ":" + d).join("\n");
+    return [
+      "# 在宿主机 compose 的 services 段加入以下配置后重建容器：",
+      "    devices:",
+      maps,
+      "    cap_add:",
+      "      - " + (sa.caps_container || "SYS_RAWIO"),
+    ].join("\n");
+  }
+  const grant = [
+    "sudo", sa.setcap, sa.caps_native, sa.smartctl, "&&",
+    "sudo", sa.setfacl, "-m", "u:" + sa.account + ":r", "--", sa.devices.join(" "),
+  ].join(" ");
+  const verify = [
+    "sudo -u", sa.account, sa.smartctl, "-H", "-A" + (sa.sat ? " -d sat" : ""),
+    sa.devices[0], "| grep -i temper",
+  ].join(" ");
+  return [
+    grant,
+    verify,
+    "# 授权后通常无需重启应用；重启 NAS 后需重跑 setfacl（升级应用会自动重授）",
+  ].join("\n");
+}
+
 async function loadConfig() {
   try {
     const res = await fetch("api/config", fetchOpts);
@@ -72,11 +101,13 @@ async function loadConfig() {
     // 再由选项生成隐藏字段 #input-nas-patrol-cron 的值（保存时读它）。
     initPatrolSchedule(data.nas_patrol_cron || "0 12 * * *");
 
-    // SMART 授权命令：按当前系统实际设备生成；最近一轮巡检有盘温未取得时自动展开
+    // SMART 授权：后端只给结构化数据（设备/账号/工具路径），命令文本在此拼装；
+    // 最近一轮诊断发现权限缺失时自动展开
+    const sa = data.smart_auth || {};
     const saCmds = document.getElementById("smart-auth-cmds");
-    if (saCmds) saCmds.textContent = data.smart_auth_commands || "";
+    if (saCmds) saCmds.textContent = buildSmartAuthText(sa);
     const saRow = document.getElementById("smart-auth-row");
-    if (saRow) saRow.hidden = !data.smart_auth_needed;
+    if (saRow) saRow.hidden = !sa.needed;
     const saToggle = document.getElementById("smart-auth-toggle-btn");
     if (saToggle) saToggle.onclick = function() {
       if (saRow) saRow.hidden = !saRow.hidden;

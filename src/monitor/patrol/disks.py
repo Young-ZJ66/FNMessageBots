@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 import re
@@ -26,7 +25,6 @@ from .probes import (
     _resolve_cmd,
     _run_cmd,
     _safe_glob,
-    _safe_path_exists,
     _valid_sysfs_block_token,
 )
 
@@ -711,39 +709,77 @@ def _parse_celsius_from_smartctl_text(out: str) -> str:
     return "--"
 
 
-def _sysfs_temp_path_sort_key(p: Path) -> Tuple[int, str]:
-    """优先 temp1_input（对应 Sensor1/主温），再 temp2+。"""
-    name = p.name.lower()
-    m = re.match(r"temp(\d+)_input$", name)
-    idx = int(m.group(1)) if m else 99
-    # smart_log/temperature 视作主温度
-    if name == "temperature":
-        idx = 0
-    return (idx, str(p))
+def _nvme_controller_name(block_name: str) -> str:
+    m = re.fullmatch(r"(nvme\d+)(?:n\d+)?(?:p\d+)?", str(block_name or ""))
+    return m.group(1) if m else ""
 
 
-def _hwmon_temp1_for_block(nb: str) -> str:
+def _disk_hwmon_dirs(nb: str, sysfs_root: Path = Path("/sys")) -> List[Path]:
+    """用 sysfs 设备链接把 hwmon 传感器绑定到具体盘，禁止仅按
+    nvme/drivetemp 通用名称匹配——多盘机器上按名称泛配会把同一传感器的
+    温度套给所有盘。"""
     if not _valid_sysfs_block_token(nb):
-        return ""
-    patterns = (
-        f"/sys/block/{nb}/../../hwmon/hwmon*/temp1_input",
-        f"/sys/block/{nb}/device/hwmon*/temp1_input",
-        f"/sys/block/{nb}/device/hwmon/hwmon*/temp1_input",
-    )
-    for pat in patterns:
+        return []
+    device_paths = [sysfs_root / "class" / "block" / nb, sysfs_root / "class" / "block" / nb / "device"]
+    ctrl = _nvme_controller_name(nb)
+    if ctrl:
+        device_paths.extend([sysfs_root / "class" / "nvme" / ctrl, sysfs_root / "class" / "nvme" / ctrl / "device"])
+    roots: Set[Path] = set()
+    for device in device_paths:
         try:
-            matches = sorted(glob.glob(pat))
-        except Exception:
+            roots.add(device.resolve(strict=True))
+        except (OSError, RuntimeError):
             continue
-        for f in matches:
+    matches: Set[Path] = set()
+    for root in roots:
+        for parent in (root, root / "hwmon"):
+            for hw in _safe_glob(parent, "hwmon*"):
+                if re.fullmatch(r"hwmon\d+", hw.name):
+                    matches.add(hw)
+    for hw in _safe_glob(sysfs_root / "class" / "hwmon", "hwmon*"):
+        try:
+            device = (hw / "device").resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if any(device == root or root in device.parents for root in roots):
+            matches.add(hw)
+    return sorted(matches, key=str)
+
+
+def _hwmon_temp1_for_block(nb: str, sysfs_root: Path = Path("/sys")) -> str:
+    for hw in _disk_hwmon_dirs(nb, sysfs_root=sysfs_root):
+        for path in (hw / "temp1_input", hw / "device" / "temp1_input"):
             try:
-                raw = Path(f).read_text(encoding="utf-8", errors="ignore").strip()
-                c = int(raw) // 1000
+                c = int(path.read_text(encoding="utf-8", errors="ignore").strip()) / 1000.0
+                if _celsius_ok(c):
+                    # 保留飞牛主温度取整的展示方式
+                    return str(int(c))
             except (OSError, ValueError):
                 continue
-            if _celsius_ok(c):
-                return str(c)
     return ""
+
+
+def _smartctl_sat_retry_needed(block_path: str, output: str) -> bool:
+    """仅 USB 桥接识别/透传失败时建议 SAT 重试，不把权限不足当成设备类型错误。"""
+    low = (output or "").lower()
+    if any(marker in low for marker in ("permission denied", "operation not permitted", "access denied")):
+        return False
+    if "unknown usb bridge" in low:
+        return True
+    if not any(marker in low for marker in (
+        "please specify device type", "unable to detect device type",
+        "unsupported field in scsi command", "unsupported scsi opcode",
+        "read device identity failed",
+    )):
+        return False
+    nb = _normalize_block_name(os.path.basename(block_path))
+    if not _valid_sysfs_block_token(nb):
+        return False
+    try:
+        device = Path(f"/sys/class/block/{nb}/device").resolve(strict=True)
+        return any(re.fullmatch(r"usb\d+", part) for part in device.parts)
+    except (OSError, RuntimeError):
+        return False
 
 
 def _smart_temp_for_block_path(block_path: str) -> str:
@@ -824,63 +860,16 @@ def _smart_temp_for_block_path(block_path: str) -> str:
                         if c is not None:
                             return _fmt_celsius(c)
 
-    # 4) sysfs / hwmon：优先 temp1
-    sys_paths: List[Path] = []
-    if _valid_sysfs_block_token(nb):
-        block_hwmon = Path(f"/sys/block/{nb}/device/hwmon")
-        if _safe_path_exists(block_hwmon):
-            for p in _safe_glob(block_hwmon, "hwmon*/temp*_input"):
-                sys_paths.append(p)
-        if nb.startswith("nvme"):
-            ctrl = nb.split("n")[0] if "n" in nb else nb
-            nvme_hwmon = Path(f"/sys/class/nvme/{ctrl}/device/hwmon")
-            if _safe_path_exists(nvme_hwmon):
-                for p in _safe_glob(nvme_hwmon, "hwmon*/temp*_input"):
-                    sys_paths.append(p)
-            sys_paths.append(Path(f"/sys/class/nvme/{ctrl}/smart_log/temperature"))
+    # 4) hwmon 已在最前面按设备链接绑定读取；这里只尝试 NVMe 控制器的专用节点
+    ctrl = _nvme_controller_name(nb)
+    if ctrl:
         try:
-            for hm in Path("/sys/class/hwmon").iterdir():
-                try:
-                    name = (hm / "name").read_text(encoding="utf-8", errors="ignore").strip().lower()
-                except OSError:
-                    name = ""
-                if name not in {"drivetemp", "nvme", "sata"} and nb.lower() not in name:
-                    try:
-                        link = os.path.realpath(str(hm / "device"))
-                        if f"/{nb}" not in link and not link.endswith(f"/{nb}"):
-                            continue
-                    except OSError:
-                        if name not in {"drivetemp", "nvme"}:
-                            continue
-                for p in _safe_glob(hm, "temp*_input"):
-                    sys_paths.append(p)
-        except OSError:
-            pass
-
-    seen_paths: Set[str] = set()
-    ordered = sorted(sys_paths, key=_sysfs_temp_path_sort_key)
-    for temp_path in ordered:
-        sp = str(temp_path)
-        if sp in seen_paths:
-            continue
-        seen_paths.add(sp)
-        # 跳过 temp2+（飞牛展示用 Sensor1/temp1）
-        m_idx = re.search(r"temp(\d+)_input$", temp_path.name.lower())
-        if m_idx and int(m_idx.group(1)) >= 2:
-            continue
-        try:
-            raw = temp_path.read_text(encoding="utf-8", errors="ignore").strip()
-            if not raw:
-                continue
-            v = int(raw)
-            if abs(v) > 1000:
-                c = v / 1000.0
-            else:
-                c = float(v)
-            if _celsius_ok(c):
+            raw = Path(f"/sys/class/nvme/{ctrl}/smart_log/temperature").read_text(encoding="utf-8", errors="ignore").strip()
+            c = _nvme_kelvin_or_celsius(int(raw))
+            if c is not None:
                 return _fmt_celsius(c)
-        except Exception:
-            continue
+        except (OSError, ValueError):
+            pass
     return "--"
 
 

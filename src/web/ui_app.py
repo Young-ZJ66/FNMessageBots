@@ -57,13 +57,13 @@ _runtime_monitor_app = None
 
 
 def _smart_auth_state():
-    """SMART 授权命令与展示标记（按当前系统实际设备生成）；巡检模块不可用时静默降级。"""
+    """SMART 授权数据包（结构化字段，命令文本由前端拼装）；巡检模块不可用时静默降级。"""
     try:
-        from monitor.patrol.smart_auth import auth_needed, generate_auth_commands
+        from monitor.patrol.smart_auth import get_state
 
-        return {"needed": auth_needed(), "commands": generate_auth_commands()}
+        return get_state()
     except Exception:
-        return {"needed": False, "commands": ""}
+        return {"needed": False, "issues": [], "devices": [], "mode": "native", "checked_at": ""}
 
 # 内置测试消息：Web 页「发送测试消息」一键发送，无需用户输入内容
 BUILT_IN_TEST_MESSAGE = "FnMessageBot 测试推送。收到本条即说明渠道配置与网络可用；实际推送样式以真实事件为准。"
@@ -405,6 +405,11 @@ def create_app(on_config_saved=None) -> Flask:
     def robots_txt():
         return "User-agent: *\nDisallow: /\n", 200, {"Content-Type": "text/plain; charset=utf-8"}
 
+    @app.get("/healthz")
+    def healthz():
+        """容器健康探针：仅确认 HTTP 服务可响应，不读取配置或 NAS 数据源。"""
+        return jsonify({"ok": True})
+
     @app.after_request
     def _no_index(resp):
         resp.headers.setdefault("X-Robots-Tag", "noindex, nofollow, noarchive")
@@ -427,6 +432,7 @@ def create_app(on_config_saved=None) -> Flask:
         "/",
         "/favicon.ico",
         "/robots.txt",
+        "/healthz",
         "/api/auth/status",
         "/api/auth/login",
         "/api/auth/set-password",
@@ -619,8 +625,7 @@ def create_app(on_config_saved=None) -> Flask:
             "ssh_ignore_loopback": as_bool(raw.get("ssh_ignore_loopback", False), False),
             "nas_patrol_enabled": as_bool(raw.get("nas_patrol_enabled", False), False),
             "nas_patrol_cron": _cron,
-            "smart_auth_needed": _smart_auth_state()["needed"],
-            "smart_auth_commands": _smart_auth_state()["commands"],
+            "smart_auth": _smart_auth_state(),
             "channel_options": CHANNEL_OPTIONS,
         }
         db_access_warnings = _collect_external_db_access_warnings(raw, monitor_events)
@@ -767,6 +772,14 @@ def create_app(on_config_saved=None) -> Flask:
             return jsonify({"ok": False, "message": f"配置写入失败（{e}），请检查 config 目录是否可写。"}), 500
 
         db_access_warnings = _collect_external_db_access_warnings(raw, events)
+        if nas_patrol_enabled or "NAS_PATROL_REPORT" in events:
+            # 巡检主动诊断（限时预算）：区分权限缺失/未装工具/超时/无传感器
+            try:
+                from monitor.patrol.smart_auth import run_diagnostics, warning_messages
+
+                db_access_warnings = list(db_access_warnings or []) + warning_messages(run_diagnostics())
+            except Exception:
+                pass
         if nas_patrol_cron and not nas_patrol_enabled:
             db_access_warnings = list(db_access_warnings or [])
             db_access_warnings.append(
@@ -917,23 +930,14 @@ def create_app(on_config_saved=None) -> Flask:
 
     @app.get("/faq")
     def faq_page():
-        """常见问题页。SMART 授权命令按当前系统实际设备动态生成。"""
-        try:
-            from monitor.patrol.smart_auth import generate_auth_commands, is_container_mode
-
-            smart_auth_commands = generate_auth_commands()
-            smart_is_container = is_container_mode()
-        except Exception:
-            smart_auth_commands = ""
-            smart_is_container = False
+        """常见问题页。SMART 授权数据按当前系统实际设备生成，命令文本由模板拼装。"""
         return render_template(
             "faq.html",
             favicon_url=favicon_url,
             repo_url=PROJECT_REPO_URL,
             docs_url=PROJECT_DOCS_URL,
             footer_text=FOOTER_TEXT,
-            smart_auth_commands=smart_auth_commands,
-            smart_is_container=smart_is_container,
+            smart_auth=_smart_auth_state(),
         )
 
     @app.get("/")

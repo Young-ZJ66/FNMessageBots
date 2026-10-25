@@ -68,6 +68,7 @@ ANON_EXPECTED = {
 PUBLIC_EXPECTED = {
     "/": 200,
     "/api/auth/status": 200,
+    "/healthz": 200,
     "/robots.txt": 200,
 }
 
@@ -198,13 +199,20 @@ def _tag_balance(html: str) -> List[str]:
     return problems
 
 
+_JINJA_KEYWORDS = {"if", "else", "elif", "and", "or", "not", "none", "true", "false"}
+
+
 def _referenced_vars(html: str) -> Set[str]:
     """提取模板引用的顶层变量名。"""
     found: Set[str] = set()
 
     def add(expr: str) -> None:
-        for raw in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr):
-            found.add(raw)
+        # 点号访问（smart_auth.account）只取顶层名——视图提供的是根对象；
+        # 行内条件（A if cond else B）的关键字不算引用
+        for raw in re.findall(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*", expr):
+            root = raw.split(".")[0]
+            if root not in _JINJA_KEYWORDS:
+                found.add(root)
 
     for m in re.finditer(r"\{\{-?\s*(.*?)\s*-?\}\}", html, re.S):
         expr = m.group(1)

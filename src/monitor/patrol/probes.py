@@ -108,6 +108,20 @@ def _run_cmd(args: List[str], timeout: float = 2.0) -> str:
     return (p.stderr or "").strip()
 
 
+def _run_smart_probe(args: List[str], timeout: float) -> str:
+    """SMART 只读探测：argv 参数列表、shell=False；异常（找不到命令/超时）
+    向上抛出由诊断层分类，返回合并的 stdout+stderr。"""
+    p = subprocess.run(
+        list(args),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        shell=False,
+    )
+    return (p.stdout or "") + (p.stderr or "")
+
+
 def _run_cmd_any(candidates: List[List[str]], timeout: float = 2.0) -> str:
     for c in candidates:
         out = _run_cmd(c, timeout=timeout)
