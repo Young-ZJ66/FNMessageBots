@@ -38,6 +38,15 @@ services:
       # - /etc/hostname:/host/etc/hostname:ro
       # 可选：UPS 巡检（挂 /etc/nut 目录；无 ups.conf 时跳过 UPS，不导致启动失败）
       # - /etc/nut:/etc/nut:ro
+    # 可选：盘温/健康采集（smartctl 直连读 SMART，不唤醒休眠盘——探测带 -n standby）。
+    # 容器默认看不到宿主块设备，按实际存在的盘名取消注释；节点不存在会导致 compose 启动失败
+    # devices:
+    #   - /dev/sda:/dev/sda
+    #   - /dev/sdb:/dev/sdb
+    #   - /dev/sdc:/dev/sdc
+    #   - /dev/sdd:/dev/sdd
+    #   - /dev/sde:/dev/sde
+    #   - /dev/sdf:/dev/sdf
     environment:
       - TZ=Asia/Shanghai
       # 可选：预置初始 Web 密码（至少 8 位）；不填则首次访问需输入启动日志中的初始化码
