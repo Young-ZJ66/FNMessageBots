@@ -50,9 +50,7 @@ from web.config_store import channels_from_raw as _channels_from_raw
 from web.config_store import config_load_error as _config_load_error
 from web.config_store import load_raw_config as _load_raw_config_from_file
 from web.config_store import mask_channels as _mask_channels
-from web.config_store import mask_secret as _mask_secret
 from web.config_store import restore_masked_channels as _restore_masked_channels
-from web.config_store import SECRET_MASK as _SECRET_MASK
 
 # 运行中的主监控应用，供「立即巡检」等接口使用
 _runtime_monitor_app = None
@@ -611,10 +609,6 @@ def create_app(on_config_saved=None) -> Flask:
             "ssh_ignore_loopback": as_bool(raw.get("ssh_ignore_loopback", False), False),
             "nas_patrol_enabled": as_bool(raw.get("nas_patrol_enabled", False), False),
             "nas_patrol_cron": _cron,
-            "fnos_monitor_enabled": as_bool(raw.get("fnos_monitor_enabled", False), False),
-            "fnos_monitor_url": (raw.get("fnos_monitor_url") or "ws://127.0.0.1:5666").strip(),
-            "fnos_monitor_user": (raw.get("fnos_monitor_user") or "").strip(),
-            "fnos_monitor_password": _mask_secret(str(raw.get("fnos_monitor_password") or "")),
             "channel_options": CHANNEL_OPTIONS,
         }
         db_access_warnings = _collect_external_db_access_warnings(raw, monitor_events)
@@ -668,22 +662,6 @@ def create_app(on_config_saved=None) -> Flask:
                 return jsonify({"ok": False, "message": str(e)}), 400
         else:
             nas_patrol_cron = (nas_patrol_cron or "0 12 * * *").strip() or "0 12 * * *"
-
-        fnos_monitor_enabled = as_bool(payload.get("fnos_monitor_enabled", False), False)
-        fnos_monitor_url = (payload.get("fnos_monitor_url") or "").strip()
-        fnos_monitor_user = (payload.get("fnos_monitor_user") or "").strip()
-        fnos_monitor_password = str(payload.get("fnos_monitor_password") or "").strip()
-        if fnos_monitor_enabled:
-            from monitor.patrol.fnos_ws import build_ws_url as _fnos_build_ws_url
-
-            if not fnos_monitor_url:
-                return jsonify({"ok": False, "message": "启用飞牛监控接口时需填写接口地址。"}), 400
-            try:
-                _fnos_build_ws_url(fnos_monitor_url)
-            except Exception as e:
-                return jsonify({"ok": False, "message": f"飞牛监控接口地址无效：{e}"}), 400
-            if not fnos_monitor_user or not fnos_monitor_password:
-                return jsonify({"ok": False, "message": "启用飞牛监控接口时需填写账号与密码。"}), 400
 
         # 不允许选择内部保留事件
         if EVENT_IDS_HIDDEN_IN_UI & set(events):
@@ -740,9 +718,14 @@ def create_app(on_config_saved=None) -> Flask:
         flat_keys = _sync_channel_flat_keys(channels)
 
         raw = _load_raw_config()
-        # 密码打码回显：提交值仍是打码形态时保留已存原值；清空=清除，新值=覆盖
-        if _SECRET_MASK in fnos_monitor_password:
-            fnos_monitor_password = str(raw.get("fnos_monitor_password") or "")
+        # 已移除功能的残留键（含曾存过的 fnOS 账号密码）随保存一并清除
+        for _removed_key in (
+            "fnos_monitor_enabled",
+            "fnos_monitor_url",
+            "fnos_monitor_user",
+            "fnos_monitor_password",
+        ):
+            raw.pop(_removed_key, None)
         raw.update(
             {
                 **flat_keys,
@@ -762,10 +745,6 @@ def create_app(on_config_saved=None) -> Flask:
                 "ssh_ignore_loopback": ssh_ignore_loopback,
                 "nas_patrol_enabled": nas_patrol_enabled,
                 "nas_patrol_cron": nas_patrol_cron,
-                "fnos_monitor_enabled": fnos_monitor_enabled,
-                "fnos_monitor_url": fnos_monitor_url or "ws://127.0.0.1:5666",
-                "fnos_monitor_user": fnos_monitor_user,
-                "fnos_monitor_password": fnos_monitor_password,
                 "title_prefix": title_prefix,
             }
         )

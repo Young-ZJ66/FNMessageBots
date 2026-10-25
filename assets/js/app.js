@@ -72,16 +72,6 @@ async function loadConfig() {
     // 再由选项生成隐藏字段 #input-nas-patrol-cron 的值（保存时读它）。
     initPatrolSchedule(data.nas_patrol_cron || "0 12 * * *");
 
-    // 飞牛监控接口（巡检盘温/健康数据源）：密码为打码回显，保持不变即保留
-    const fnosEn = document.getElementById("input-fnos-monitor-enabled");
-    if (fnosEn) fnosEn.checked = !!data.fnos_monitor_enabled;
-    const fnosUrl = document.getElementById("input-fnos-monitor-url");
-    if (fnosUrl) fnosUrl.value = data.fnos_monitor_url || "ws://127.0.0.1:5666";
-    const fnosUser = document.getElementById("input-fnos-monitor-user");
-    if (fnosUser) fnosUser.value = data.fnos_monitor_user || "";
-    const fnosPwd = document.getElementById("input-fnos-monitor-password");
-    if (fnosPwd) fnosPwd.value = data.fnos_monitor_password || "";
-
     // 配置已从服务端加载成功即可测推送，不必再次点「保存配置」。
     testBtn.disabled = false;
     setStatus(false, "");
@@ -169,10 +159,6 @@ saveBtn.addEventListener("click", async () => {
     dnd_end_time: document.getElementById("input-dnd-end").value || "07:00",
     nas_patrol_enabled: document.getElementById("input-nas-patrol-enabled").checked,
     nas_patrol_cron: (document.getElementById("input-nas-patrol-cron").value || "").trim(),
-    fnos_monitor_enabled: document.getElementById("input-fnos-monitor-enabled").checked,
-    fnos_monitor_url: (document.getElementById("input-fnos-monitor-url").value || "").trim(),
-    fnos_monitor_user: (document.getElementById("input-fnos-monitor-user").value || "").trim(),
-    fnos_monitor_password: document.getElementById("input-fnos-monitor-password").value || "",
   };
 
   try {

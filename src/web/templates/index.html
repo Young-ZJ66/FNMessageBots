@@ -441,46 +441,6 @@
               </div>
             </div>
 
-            <div class="section-title" style="margin-top: 18px;">
-              <span>飞牛监控接口 <small>硬盘温度与健康优先读取 fnOS 自带接口（与「硬盘信息」页面同源），无需 smartctl 设备权限；不可用时自动回退命令探测</small></span>
-            </div>
-            <div class="setting-rows">
-              <div class="setting-row">
-                <div class="setting-label">
-                  <span class="setting-name">启用飞牛监控接口</span>
-                  <div class="field-helper">通过 fnOS WebSocket API 读取。容器部署请填写<strong>可达的 NAS 地址</strong>；native 部署用默认地址即可。休眠中的盘不会因巡检被唤醒。</div>
-                </div>
-                <div class="setting-control">{{ switch("input-fnos-monitor-enabled", "启用") }}</div>
-              </div>
-              <div class="setting-row">
-                <div class="setting-label">
-                  <span class="setting-name">接口地址</span>
-                  <div class="field-helper">如 <code>ws://192.168.5.66:5666</code>（fnOS 默认 ws 5666 / wss 5667），仅支持 ws/wss。</div>
-                </div>
-                <div class="setting-control">
-                  <input id="input-fnos-monitor-url" type="text" placeholder="ws://127.0.0.1:5666" autocomplete="off" />
-                </div>
-              </div>
-              <div class="setting-row">
-                <div class="setting-label">
-                  <span class="setting-name">账号</span>
-                  <div class="field-helper"><strong>不建议填写开启了管理员权限的账号</strong>（免二次验证的管理员账号有安全风险）。如要试用请使用普通权限的专用账号；保持本项关闭时，巡检走磁盘直连探测（native 安装包已自动授权，容器版自动映射盘设备）。</div>
-                </div>
-                <div class="setting-control">
-                  <input id="input-fnos-monitor-user" type="text" autocomplete="off" />
-                </div>
-              </div>
-              <div class="setting-row">
-                <div class="setting-label">
-                  <span class="setting-name">密码</span>
-                  <div class="field-helper">保存后打码显示；保持打码值不变即保留原密码，清空即清除。</div>
-                </div>
-                <div class="setting-control">
-                  <input id="input-fnos-monitor-password" type="password" autocomplete="new-password" />
-                </div>
-              </div>
-            </div>
-
             <!-- 保存与后端校验用的真实值；由 schedule.js 根据上面的选择生成 -->
             <input type="hidden" id="input-nas-patrol-cron" value="0 12 * * *" />
             <div class="patrol-summary" id="patrol-summary"></div>

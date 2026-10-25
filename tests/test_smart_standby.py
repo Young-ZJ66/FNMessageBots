@@ -123,7 +123,7 @@ class CollectRowStandbyCase(unittest.TestCase):
         disks._patrol_list_visible_whole_disks = lambda: ["sdz"]
         disks._psutil_disk_temp_fallback = _boom
         try:
-            items = disks._collect_disk_items(None)
+            items = disks._collect_disk_items()
         finally:
             disks._run_cmd = orig_run
             disks._patrol_scan_vol_space_by_physical = orig_scan
