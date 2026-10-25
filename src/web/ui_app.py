@@ -39,7 +39,7 @@ from web.auth_service import has_password_set as _has_password_set_fn
 from web.auth_service import verify_password as _verify_password
 from web.api_helpers import build_notifier_from_raw as _build_notifier_from_raw
 from web.api_helpers import parse_success_filter as _parse_success_filter
-from web.app_paths import BASE_DIR
+from web.app_paths import CODE_DIR
 from web.app_paths import CONFIG_FILE
 from web.app_paths import FOOTER_TEXT
 from web.app_paths import GITHUB_ICON_FILE
@@ -375,7 +375,7 @@ def create_app(on_config_saved=None) -> Flask:
     _apply_initial_password_from_env()
     if not _has_password_set() and not _auth_disabled_by_env():
         _setup_codes.ensure()
-    assets_dir = BASE_DIR / "assets"
+    assets_dir = CODE_DIR / "assets"
 
     @app.get("/assets/<path:filename>")
     def serve_assets(filename: str):
