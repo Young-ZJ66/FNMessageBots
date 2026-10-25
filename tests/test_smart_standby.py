@@ -28,6 +28,7 @@ for _p in (str(_SUPPORT), str(_ROOT / "src"), str(_ROOT)):
 from monitor.patrol import disks  # noqa: E402
 
 STANDBY_TEXT = "Device is in STANDBY mode, exit(2)\n"
+SLEEP_TEXT = "Device is in SLEEP mode, exit(2)\n"
 STANDBY_JSON = '{"smartctl":{"exit_status":2,"messages":[{"string":"Device is in STANDBY mode, exit(2)"}]}}'
 LOWPOWER_TEXT = "SKIP S.M.A.R.T. response. Device is in a low-power mode (STANDBY)\n"
 NORMAL_TEMP_JSON = '{"temperature":{"current":33},"smart_status":{"passed":true}}'
@@ -37,7 +38,7 @@ NORMAL_HEALTH_TEXT = "SMART overall-health self-assessment test result: PASSED\n
 
 class StandbyRegexCase(unittest.TestCase):
     def test_matches_standby_variants(self):
-        for sample in (STANDBY_TEXT, STANDBY_JSON, LOWPOWER_TEXT):
+        for sample in (STANDBY_TEXT, SLEEP_TEXT, STANDBY_JSON, LOWPOWER_TEXT):
             self.assertIsNotNone(disks._SMART_STANDBY_RE.search(sample.lower()), sample)
 
     def test_normal_output_not_matched(self):
