@@ -403,9 +403,13 @@ def _smart_health_for_block_path(block_path: str) -> str:
     nb = _normalize_block_name(base) or base
     if not _valid_sysfs_block_token(nb) and not bp.startswith("/dev/mapper/"):
         return "--"
-    # -n standby：休眠盘直接返回低功耗提示而不唤醒（温度/健康在休眠态本就无意义）
-    out = _run_cmd(["smartctl", "-n", "standby", "-H", bp], timeout=2.5)
-    if out:
+    # -n standby：休眠盘直接返回低功耗提示而不唤醒（温度/健康在休眠态本就无意义）。
+    # 部分 SATA 控制器/桥接的 ATA 命令要过 SAT 转换层，smartctl 自动探测会提示
+    # 「Probable ATA device behind a SAT layer」，plain 不出结果时自动用 -d sat 重试
+    for extra in ((), ("-d", "sat")):
+        out = _run_cmd(["smartctl", "-n", "standby", *extra, "-H", bp], timeout=2.5)
+        if not out:
+            continue
         low = out.lower()
         if _SMART_STANDBY_RE.search(low):
             return "休眠"
@@ -742,21 +746,26 @@ def _smart_temp_for_block_path(block_path: str) -> str:
     if hw:
         return hw
 
-    # 1) smartctl JSON（避免文本列对齐误解析）；-n standby 防止唤醒休眠盘
-    out_json = _run_cmd(["smartctl", "-n", "standby", "-A", "-j", bp], timeout=3.0)
-    if out_json:
+    # 1) smartctl JSON（避免文本列对齐误解析）；-n standby 防止唤醒休眠盘；
+    #    plain 不出结果时用 -d sat 重试（SAT 转换层见健康探测处注释）
+    for extra in ((), ("-d", "sat")):
+        out_json = _run_cmd(["smartctl", "-n", "standby", *extra, "-A", "-j", bp], timeout=3.0)
+        if not out_json:
+            continue
         if _SMART_STANDBY_RE.search(out_json.lower()):
             return "休眠"
         try:
             parsed = _parse_celsius_from_smartctl_json(json.loads(out_json))
-            if parsed not in {"--", "—"}:
-                return parsed
         except Exception:
-            pass
+            continue
+        if parsed not in {"--", "—"}:
+            return parsed
 
     # 2) smartctl 文本
-    out = _run_cmd(["smartctl", "-n", "standby", "-A", bp], timeout=2.5)
-    if out:
+    for extra in ((), ("-d", "sat")):
+        out = _run_cmd(["smartctl", "-n", "standby", *extra, "-A", bp], timeout=2.5)
+        if not out:
+            continue
         if _SMART_STANDBY_RE.search(out.lower()):
             return "休眠"
         parsed = _parse_celsius_from_smartctl_text(out)

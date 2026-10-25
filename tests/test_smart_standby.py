@@ -48,9 +48,10 @@ class StandbyRegexCase(unittest.TestCase):
 class _RunCmdStub:
     """按 smartctl 参数形态返回桩输出，并记录调用参数。"""
 
-    def __init__(self, standby=True):
+    def __init__(self, standby=True, sat_layer=False):
         self.calls = []
         self.standby = standby
+        self.sat_layer = sat_layer  # True: plain 调用返回 SAT 提示，-d sat 才给真数据
 
     def __call__(self, args, timeout=2.0):
         self.calls.append(list(args))
@@ -58,9 +59,9 @@ class _RunCmdStub:
         if "smartctl" not in joined:
             return ""
         if self.standby:
-            if "-j" in args:
-                return STANDBY_JSON
-            return STANDBY_TEXT if "-H" not in args else STANDBY_TEXT
+            return STANDBY_TEXT
+        if self.sat_layer and "-d" not in args:
+            return "Probable ATA device behind a SAT layer. Try an additional '-d sat' argument.\n"
         if "-j" in args:
             return NORMAL_TEMP_JSON
         return NORMAL_HEALTH_TEXT if "-H" in args else NORMAL_TEMP_TEXT
@@ -136,6 +137,43 @@ class CollectRowStandbyCase(unittest.TestCase):
         self.assertEqual(row["temp_c"], "--")
         self.assertIn("休眠", row["temp_reason"])
         self.assertEqual(row["status_reason"], "")
+
+
+class SatLayerRetryCase(unittest.TestCase):
+    """SAT 转换层回退：plain 提示「Probable ATA device behind a SAT layer」时，
+    自动用 -d sat 重试并拿到温度/健康。"""
+
+    def _patch(self, stub):
+        orig = disks._run_cmd
+        disks._run_cmd = stub
+        return orig
+
+    def test_temp_retries_with_d_sat(self):
+        stub = _RunCmdStub(standby=False, sat_layer=True)
+        orig = self._patch(stub)
+        try:
+            self.assertEqual(disks._smart_temp_for_block_path("/dev/sdz"), "33.0")
+        finally:
+            disks._run_cmd = orig
+        self.assertTrue(any("-d" in c and "sat" in c for c in stub.calls), stub.calls)
+
+    def test_health_retries_with_d_sat(self):
+        stub = _RunCmdStub(standby=False, sat_layer=True)
+        orig = self._patch(stub)
+        try:
+            self.assertEqual(disks._smart_health_for_block_path("/dev/sdz"), "健康")
+        finally:
+            disks._run_cmd = orig
+
+    def test_plain_success_never_retries(self):
+        stub = _RunCmdStub(standby=False, sat_layer=False)
+        orig = self._patch(stub)
+        try:
+            self.assertEqual(disks._smart_temp_for_block_path("/dev/sdz"), "33.0")
+        finally:
+            disks._run_cmd = orig
+        for c in stub.calls:
+            self.assertNotIn("-d", c)
 
 
 if __name__ == "__main__":
