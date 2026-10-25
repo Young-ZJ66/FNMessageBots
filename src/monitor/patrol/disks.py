@@ -32,10 +32,12 @@ from .probes import (
 
 
 
-# smartctl -n standby：盘处于低功耗态时的提示（不唤醒盘）。
-# 文本形如 "Device is in STANDBY mode, exit(2)" / "Device is in a low-power mode (STANDBY)"
-_SMART_STANDBY_RE = re.compile(
-    r"device is in (a )?(standby|sleep|zzz|low-power)|standby mode, exit", re.IGNORECASE
+# 盘温/健康读取失败时的提示（写入推送记录详情，指引用户执行对应动作）
+_SMART_UNAVAILABLE_HINT = (
+    "未取得 SMART 数据：native 部署请在宿主机执行 SMART 授权——"
+    "sudo setcap cap_sys_rawio,cap_sys_admin+ep $(command -v smartctl) 与 "
+    "sudo setfacl -m u:FnMessageBot:r /dev/sdX（设备按实际替换，重启后需重授权）；"
+    "容器部署需在 compose 映射盘设备并重建容器"
 )
 
 
@@ -403,16 +405,15 @@ def _smart_health_for_block_path(block_path: str) -> str:
     nb = _normalize_block_name(base) or base
     if not _valid_sysfs_block_token(nb) and not bp.startswith("/dev/mapper/"):
         return "--"
-    # -n standby：休眠盘直接返回低功耗提示而不唤醒（温度/健康在休眠态本就无意义）。
     # 部分 SATA 控制器/桥接的 ATA 命令要过 SAT 转换层，smartctl 自动探测会提示
-    # 「Probable ATA device behind a SAT layer」，plain 不出结果时自动用 -d sat 重试
+    # 「Probable ATA device behind a SAT layer」，plain 不出结果时自动用 -d sat 重试。
+    # 不用 -n standby：实测部分 SAT 层对节能态查询恒报 SLEEP/STANDBY（与上游一致，
+    # 读 SMART 唤醒休眠盘是飞牛界面同样的行为）
     for extra in ((), ("-d", "sat")):
-        out = _run_cmd(["smartctl", "-n", "standby", *extra, "-H", bp], timeout=2.5)
+        out = _run_cmd(["smartctl", *extra, "-H", bp], timeout=2.5)
         if not out:
             continue
         low = out.lower()
-        if _SMART_STANDBY_RE.search(low):
-            return "休眠"
         if "test result: passed" in low or "smart overall-health self-assessment test result: passed" in low:
             return "健康"
         fail_markers = (
@@ -746,14 +747,11 @@ def _smart_temp_for_block_path(block_path: str) -> str:
     if hw:
         return hw
 
-    # 1) smartctl JSON（避免文本列对齐误解析）；-n standby 防止唤醒休眠盘；
-    #    plain 不出结果时用 -d sat 重试（SAT 转换层见健康探测处注释）
+    # 1) smartctl JSON（避免文本列对齐误解析）；plain 不出结果时 -d sat 重试
     for extra in ((), ("-d", "sat")):
-        out_json = _run_cmd(["smartctl", "-n", "standby", *extra, "-A", "-j", bp], timeout=3.0)
+        out_json = _run_cmd(["smartctl", *extra, "-A", "-j", bp], timeout=3.0)
         if not out_json:
             continue
-        if _SMART_STANDBY_RE.search(out_json.lower()):
-            return "休眠"
         try:
             parsed = _parse_celsius_from_smartctl_json(json.loads(out_json))
         except Exception:
@@ -763,11 +761,9 @@ def _smart_temp_for_block_path(block_path: str) -> str:
 
     # 2) smartctl 文本
     for extra in ((), ("-d", "sat")):
-        out = _run_cmd(["smartctl", "-n", "standby", *extra, "-A", bp], timeout=2.5)
+        out = _run_cmd(["smartctl", *extra, "-A", bp], timeout=2.5)
         if not out:
             continue
-        if _SMART_STANDBY_RE.search(out.lower()):
-            return "休眠"
         parsed = _parse_celsius_from_smartctl_text(out)
         if parsed not in {"--", "—"}:
             return parsed
@@ -1889,9 +1885,9 @@ def _patrol_fn_compose_vol_mounts_ready() -> bool:
 def _collect_disk_items() -> List[Dict[str, str]]:
     """按物理整盘（sda / nvme0n1…）生成巡检行，不再按 /volN 卷数分行。
 
-    温度/健康对整盘路径探测（smartctl 带 -n standby：休眠盘标记「休眠」
-    且不做任何会唤醒硬盘的探测）；剩余空间仍尽量从关联的 /vol 挂载反查
-    （有则填，无则 --）。
+    温度/健康对整盘路径探测（smartctl 探测 SAT 层设备自动以 -d sat 重试；
+    与上游一致不使用 -n standby——部分 SAT 层对节能态查询恒报低功耗）；
+    剩余空间仍尽量从关联的 /vol 挂载反查（有则填，无则 --）。
     """
     items: List[Dict[str, str]] = []
     vol_space_by_physical = _patrol_scan_vol_space_by_physical()
@@ -1911,33 +1907,21 @@ def _collect_disk_items() -> List[Dict[str, str]]:
             t = _psutil_disk_temp_fallback(physical)
             temp = t if t not in {"--", "—"} else ""
         health = _smart_health_for_disk(physical)
-        # smartctl -n standby 探明休眠态：温度/健康无意义，按休眠展示，
-        # 且不做 sysfs running 弱信号兜底、不再触发任何会唤醒盘的探测
-        if temp == "休眠" or health == "休眠":
-            temp, health = "", "休眠"
-        else:
-            if health in {"--", "—"}:
-                if temp or _patrol_sysfs_disk_running(physical):
-                    health = "健康"
-                else:
-                    health = ""
+        if health in {"--", "—"}:
+            if temp or _patrol_sysfs_disk_running(physical):
+                health = "健康"
+            else:
+                health = ""
         if health == "健康":
             health = "正常"
-        dormant = health == "休眠"
         health_reason = ""
         if not health:
             health = "--"
-            health_reason = "未读到健康状态（smartctl/nvme/sysfs 均未取得，可能是命令缺失、权限或设备映射限制）"
+            health_reason = _SMART_UNAVAILABLE_HINT
         temp_reason = ""
         if not temp:
             temp = "--"
-            temp_reason = (
-                "硬盘休眠，巡检未唤醒（如需温度可待硬盘唤醒后再巡检）"
-                if dormant
-                else "未读到温度（smartctl/nvme/sysfs 均未取得，可能是命令缺失、权限或设备映射限制）"
-            )
-        if dormant:
-            health_reason = ""
+            temp_reason = _SMART_UNAVAILABLE_HINT
         m_pick = _patrol_best_mount_for_physical(physical)
         free_s, size_s = _patrol_disk_space_gb_for_row(m_pick, physical, vol_space_by_physical)
         items.append(

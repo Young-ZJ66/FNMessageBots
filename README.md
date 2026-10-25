@@ -272,6 +272,16 @@ PYTHONPATH=. LOGGER_DB_PATH=./logger_data.db3 WECHAT_WEBHOOK_URL=xxx python3 src
 
 ## 故障排除
 
+- **巡检的温度 / 健康为 `--`（SMART 授权）**：native 部署需要给应用账号开 SMART 访问（飞牛托管的普通账号权限有限，只加 disk 组不能保证生效）。在 NAS SSH 用管理员账号执行（容器部署改为在 compose 映射 `/dev/sdX` 后重建）：
+
+  ```bash
+  sudo apt-get install -y smartmontools libcap2-bin acl
+  sudo setcap cap_sys_rawio,cap_sys_admin+ep "$(command -v smartctl)"   # SATA 用 rawio，NVMe 需 admin
+  sudo setfacl -m u:FnMessageBot:r -- /dev/sda /dev/sdb /dev/sdc /dev/sdd   # 按实际盘名替换
+  sudo -u FnMessageBot smartctl -A -d sat /dev/sda | grep -i temper      # 验证；部分控制器需 -d sat
+  ```
+
+  授权后通常无需重启应用，保存配置并「立即巡检一次」验证。设备节点重启后重建，ACL 会丢失，需重跑 `setfacl`（升级应用时会自动重授）。部分 SAT 转换层设备自动探测失败时程序会自动以 `-d sat` 重试。工具升级后 capability 可能需重授；不要给 Python 解释器加 capability。
 - **收不到通知**：先看启动日志里的 `[schema 自检]` 行（见上文），再检查 Webhook、网络与 `docker compose logs`。
 - **收到的不是结构化消息（纯文本）**：确认 `push_markdown_enabled` 已开启且镜像为最新（结构化推送在 2.6.0 引入）；日志中出现「结构化消息发送失败，回退纯文本」说明渠道拒绝了 markdown（多为安全设置或旧版企业微信客户端），进程会记住该渠道改发纯文本，重启容器可重新探测。
 - **影视入库一条一条刷屏**：确认「影视/相册事件聚合推送」已开启（默认开启）并按需调整 `media_batch_window` 静默窗口。
