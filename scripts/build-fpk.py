@@ -93,12 +93,30 @@ def copy_tree(src: Path, dst: Path, *, excludes: set[str] = CODE_EXCLUDES) -> No
 
 
 def build_payload(payload: Path) -> Path:
-    """组装 payload。Docker 型：fpk/ 脚手架原样（应用代码在 GHCR 镜像内，
-    不需要打包 src）；镜像名已写死在 app/docker/docker-compose*.yaml。"""
-    copy_tree(FPK_DIR, payload, excludes=CODE_EXCLUDES | {"src"})
+    """组装 payload，按 fpk/ 的形态自动分流：
+
+    - Docker 型（有 app/docker/docker-compose.yaml）：脚手架原样，应用代码
+      在 GHCR 镜像内，包不带 src。
+    - Native 型（有 cmd/fnmessagebots/）：脚手架 + 顶层 src/assets/requirements
+      填充进 cmd/fnmessagebots/（构建时以主仓库为准覆盖包内模板）。
+    """
+    copy_tree(FPK_DIR, payload, excludes=CODE_EXCLUDES)
     gi = payload / ".gitignore"
     if gi.exists():
         gi.unlink()
+
+    code_dir = payload / "cmd" / "fnmessagebots"
+    if not code_dir.is_dir():
+        return payload  # Docker 型：无内嵌代码
+
+    # Native 型：src/assets/requirements 以主仓库当前版本为准
+    (code_dir / "src").mkdir(parents=True, exist_ok=True)
+    copy_tree(ROOT / "src", code_dir / "src")
+    copy_tree(ROOT / "assets", code_dir / "assets")
+    shutil.copy2(ROOT / "requirements.txt", code_dir / "requirements.txt")
+    junk = code_dir / "data"
+    if junk.exists():
+        shutil.rmtree(junk)
     return payload
 
 
