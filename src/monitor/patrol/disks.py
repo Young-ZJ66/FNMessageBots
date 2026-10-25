@@ -33,6 +33,13 @@ from .probes import (
 
 
 
+# smartctl -n standby：盘处于低功耗态时的提示（不唤醒盘）。
+# 文本形如 "Device is in STANDBY mode, exit(2)" / "Device is in a low-power mode (STANDBY)"
+_SMART_STANDBY_RE = re.compile(
+    r"device is in (a )?(standby|sleep|zzz|low-power)|standby mode, exit", re.IGNORECASE
+)
+
+
 def _normalize_block_name(name: str) -> str:
     n = str(name or "").strip()
     if not n or any(ch in n for ch in ":/\\"):
@@ -397,9 +404,12 @@ def _smart_health_for_block_path(block_path: str) -> str:
     nb = _normalize_block_name(base) or base
     if not _valid_sysfs_block_token(nb) and not bp.startswith("/dev/mapper/"):
         return "--"
-    out = _run_cmd(["smartctl", "-H", bp], timeout=2.5)
+    # -n standby：休眠盘直接返回低功耗提示而不唤醒（温度/健康在休眠态本就无意义）
+    out = _run_cmd(["smartctl", "-n", "standby", "-H", bp], timeout=2.5)
     if out:
         low = out.lower()
+        if _SMART_STANDBY_RE.search(low):
+            return "休眠"
         if "test result: passed" in low or "smart overall-health self-assessment test result: passed" in low:
             return "健康"
         fail_markers = (
@@ -733,9 +743,11 @@ def _smart_temp_for_block_path(block_path: str) -> str:
     if hw:
         return hw
 
-    # 1) smartctl JSON（避免文本列对齐误解析）
-    out_json = _run_cmd(["smartctl", "-A", "-j", bp], timeout=3.0)
+    # 1) smartctl JSON（避免文本列对齐误解析）；-n standby 防止唤醒休眠盘
+    out_json = _run_cmd(["smartctl", "-n", "standby", "-A", "-j", bp], timeout=3.0)
     if out_json:
+        if _SMART_STANDBY_RE.search(out_json.lower()):
+            return "休眠"
         try:
             parsed = _parse_celsius_from_smartctl_json(json.loads(out_json))
             if parsed not in {"--", "—"}:
@@ -744,8 +756,10 @@ def _smart_temp_for_block_path(block_path: str) -> str:
             pass
 
     # 2) smartctl 文本
-    out = _run_cmd(["smartctl", "-A", bp], timeout=2.5)
+    out = _run_cmd(["smartctl", "-n", "standby", "-A", bp], timeout=2.5)
     if out:
+        if _SMART_STANDBY_RE.search(out.lower()):
+            return "休眠"
         parsed = _parse_celsius_from_smartctl_text(out)
         if parsed not in {"--", "—"}:
             return parsed
@@ -1933,6 +1947,11 @@ def _collect_disk_items(cfg: Any = None) -> List[Dict[str, str]]:
                     if _patrol_sysfs_disk_running(physical) or temp:
                         h = "健康"
                 health = "" if h in {"--", "—"} else h
+        # smartctl -n standby 探明休眠态：温度/健康无意义，按休眠展示，
+        # 且不再做任何会唤醒硬盘的补充探测
+        if temp == "休眠" or health == "休眠":
+            standby = True
+            temp, health = "", "休眠"
         if health == "健康":
             health = "正常"
         health_reason = ""

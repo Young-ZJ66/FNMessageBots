@@ -36,6 +36,11 @@ services:
       # 仅追加极少见项（API socket、/vol5+）；主挂载勿再指望运行时探测
       # FNMB_OPTIONAL_VOLUMES_BEGIN
       # FNMB_OPTIONAL_VOLUMES_END
+    # 物理盘设备映射：smartctl 直连读温度/健康（安装/启动时按实际存在的
+    # /dev/sdX、/dev/nvme*n* 写入；盘温采集用 -n standby 不会唤醒休眠盘）
+    devices:
+      # FNMB_OPTIONAL_DEVICES_BEGIN
+      # FNMB_OPTIONAL_DEVICES_END
     environment:
       - TZ=Asia/Shanghai
       - APP_HOME=/app

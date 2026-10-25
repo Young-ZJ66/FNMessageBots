@@ -86,6 +86,23 @@ _fnmb_collect_extra_vols() {
   )
 }
 
+_fnmb_collect_disk_devices() {
+  # 物理盘设备节点：/dev/sd[a-z] 与 /dev/nvme*n*（整盘/命名空间）。
+  # 容器内 smartctl 直连读盘温/健康需要它；安装/启动时按实际存在节点写入，
+  # 不存在的设备不写（避免 compose 因节点缺失而失败）。热插拔后下次 recreate 生效。
+  local dev
+  _FNMB_DEVICE_LINES=()
+  _fnmb_log "collect disk devices begin"
+  shopt -s nullglob
+  for dev in /dev/sd[a-z] /dev/nvme[0-9]n[0-9]; do
+    [ -e "$dev" ] || continue
+    _FNMB_DEVICE_LINES+=("      - ${dev}:${dev}")
+    _fnmb_log "device: ${dev}"
+  done
+  shopt -u nullglob
+  _fnmb_log "collect devices done, count=${#_FNMB_DEVICE_LINES[@]}"
+}
+
 _fnmb_collect_optional_binds() {
   # 业务库/docker.sock/vol1-4/ups/dpkg 已写死在 compose；此处仅补 /vol5+ 与 API socket
   _FNMB_BIND_LINES=()
@@ -97,6 +114,7 @@ _fnmb_collect_optional_binds() {
     _fnmb_log "skip open gateway socket (not found)"
   fi
   _fnmb_log "collect done, count=${#_FNMB_BIND_LINES[@]}"
+  _fnmb_collect_disk_devices
 }
 
 _fnmb_resolve_docker_dirs() {
@@ -120,7 +138,7 @@ _fnmb_resolve_docker_dirs() {
 
 _fnmb_render_compose_file() {
   local docker_dir="$1"
-  local base out tmp optf line
+  local base out tmp optf devf line
   local -a opt_lines=()
 
   base="${docker_dir}/docker-compose.base.yaml"
@@ -145,28 +163,46 @@ _fnmb_render_compose_file() {
   fi
   opt_lines+=("      # FNMB_OPTIONAL_VOLUMES_END")
 
+  local -a dev_lines=()
+  dev_lines+=("      # FNMB_OPTIONAL_DEVICES_BEGIN")
+  dev_lines+=("      # auto-generated — physical disk nodes for smartctl (sdX / nvme*n*)")
+  if [ "${#_FNMB_DEVICE_LINES[@]}" -gt 0 ]; then
+    for line in "${_FNMB_DEVICE_LINES[@]}"; do
+      dev_lines+=("$line")
+    done
+  else
+    dev_lines+=("      # (no disk devices found)")
+  fi
+  dev_lines+=("      # FNMB_OPTIONAL_DEVICES_END")
+
   optf="${docker_dir}/.fnmb_opt_vols.$$"
+  devf="${docker_dir}/.fnmb_opt_devs.$$"
   tmp="${out}.tmp.$$"
   printf '%s\n' "${opt_lines[@]}" >"$optf"
-  awk -v opt_file="$optf" '
+  printf '%s\n' "${dev_lines[@]}" >"$devf"
+  awk -v vol_file="$optf" -v dev_file="$devf" '
     BEGIN {
-      while ((getline line < opt_file) > 0) { opts[++n] = line }
-      close(opt_file)
-      in_opt = 0
+      while ((getline line < vol_file) > 0) { vols[++nv] = line }
+      close(vol_file)
+      while ((getline line < dev_file) > 0) { devs[++nd] = line }
+      close(dev_file)
     }
     /FNMB_OPTIONAL_VOLUMES_BEGIN/ {
-      for (i = 1; i <= n; i++) print opts[i]
-      in_opt = 1
+      for (i = 1; i <= nv; i++) print vols[i]
+      skip = 1
       next
     }
-    /FNMB_OPTIONAL_VOLUMES_END/ {
-      in_opt = 0
+    /FNMB_OPTIONAL_VOLUMES_END/ { skip = 0; next }
+    /FNMB_OPTIONAL_DEVICES_BEGIN/ {
+      for (i = 1; i <= nd; i++) print devs[i]
+      skip = 1
       next
     }
-    in_opt { next }
+    /FNMB_OPTIONAL_DEVICES_END/ { skip = 0; next }
+    skip { next }
     { print }
   ' "$base" >"$tmp"
-  rm -f "$optf"
+  rm -f "$optf" "$devf"
 
   if [ ! -s "$tmp" ]; then
     rm -f "$tmp"
