@@ -54,8 +54,6 @@ def main() -> None:
             if f is not None:
                 blobs[name] = f.read()
         if "app.tgz" in blobs:
-            import io
-
             inner = tarfile.open(fileobj=io.BytesIO(blobs["app.tgz"]), mode="r:gz")
             for m in inner.getmembers():
                 if not m.isfile():
