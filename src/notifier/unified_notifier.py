@@ -847,14 +847,26 @@ class UnifiedNotifier:
             self.multi_platform_notifier.cleanup_cache()
     
     def get_stats(self) -> Dict[str, Any]:
-        """获取统计信息"""
-        stats = {
+        """获取统计信息（拍平连接池计数到顶层，main 的关停统计直接读这些键）。
+
+        历史上这里只返回嵌套的 multi_platform_notifier 子字典，main.py 却从
+        顶层取 request_count/success_count 等键——于是关停统计永远打 0，
+        即使通知全部发送成功。保留子字典以兼容旧调用方。
+        """
+        stats: Dict[str, Any] = {
             'has_multi_platform_notifier': self.multi_platform_notifier is not None
         }
-        
+
         if self.multi_platform_notifier:
-            stats['multi_platform_notifier'] = self.multi_platform_notifier.get_stats()
-        
+            inner = self.multi_platform_notifier.get_stats()
+            stats['multi_platform_notifier'] = inner
+            # 连接池的键名是 total_requests/successful_requests/failed_requests，
+            # 映射为 main 关停统计打印所用的 request_count/success_count/error_count
+            stats['request_count'] = inner.get('total_requests', 0)
+            stats['success_count'] = inner.get('successful_requests', 0)
+            stats['error_count'] = inner.get('failed_requests', 0)
+            stats['success_rate'] = inner.get('success_rate', '0.0%')
+
         return stats
 
     def get_delivery_health(self) -> Dict[str, Any]:

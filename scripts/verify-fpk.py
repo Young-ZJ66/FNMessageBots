@@ -68,11 +68,13 @@ def main() -> None:
         "cmd/main",
         "cmd/install_callback",
         "cmd/upgrade_callback",
+        "cmd/lib_vol_override.sh",
         "config/privilege",
         "app/ui/config",
         "wizard/install",
-        "cmd/fnmessagebots/requirements.txt",
-        "cmd/fnmessagebots/src/main.py",
+        "app/docker/docker-compose.yaml",
+        "app/docker/docker-compose.base.yaml",
+        "app/docker/config/config.json",
     ]
     for name in required:
         assert name in blobs, f"包内缺少关键文件: {name}"
@@ -85,43 +87,28 @@ def main() -> None:
     assert mver == fname_ver, f"manifest 版本 {mver} 与文件名 {fname_ver} 不一致"
     print(f"  [OK] 版本一致: {mver}")
 
-    # 5) 默认 config 无已移除渠道键
-    cfg = json.loads(blobs["cmd/fnmessagebots/config/config.json"].decode("utf-8"))
+    # 5) Docker 型：resource 声明 docker-project（安装即建容器的前提）
+    resource = json.loads(blobs["config/resource"].decode("utf-8"))
+    assert "docker-project" in resource, "config/resource 缺少 docker-project 声明"
+    print("  [OK] resource 为 Docker 型（安装即建容器）")
+
+    # 6) compose 镜像指向本仓库 GHCR（公开包）
+    for name in ("app/docker/docker-compose.yaml", "app/docker/docker-compose.base.yaml"):
+        compose = blobs[name].decode("utf-8")
+        assert "ghcr.io/young-zj66/fnmessagebots" in compose, f"{name} 镜像名不是本仓库 GHCR"
+        assert "sunanang" not in compose, f"{name} 仍指向上游镜像"
+    print("  [OK] compose 镜像为 ghcr.io/young-zj66/fnmessagebots")
+
+    # 7) 默认 config 无已移除渠道键
+    cfg = json.loads(blobs["app/docker/config/config.json"].decode("utf-8"))
     bad = REMOVED_CHANNEL_KEYS & set(cfg)
     assert not bad, f"默认配置仍含已移除渠道键: {bad}"
     supported = {"wechat_webhook_url", "dingtalk_webhook_url", "feishu_webhook_url", "webhook_params"}
     assert supported & set(cfg), "默认配置缺少任一支持渠道字段"
     print("  [OK] 默认配置为四渠道口径")
 
-    # 6) 包内 src 与主仓库一致（全部文件对比）
-    src_root = ROOT / "src"
-    repo_files = {
-        str(p.relative_to(ROOT)).replace("\\", "/"): p.read_bytes()
-        for p in src_root.rglob("*")
-        if p.is_file()
-        and "__pycache__" not in p.parts
-        and p.suffix not in (".pyc", ".pyo", ".pyd")
-        and "data" not in p.parts
-    }
-    pkg_src = {
-        n: b for n, b in blobs.items() if n.startswith("cmd/fnmessagebots/src/")
-    }
-    norm_pkg = {n.removeprefix("cmd/fnmessagebots/"): b for n, b in pkg_src.items()}
-    missing = set(repo_files) - set(norm_pkg)
-    extra = set(norm_pkg) - set(repo_files)
-    assert not missing, f"包内 src 缺文件: {sorted(missing)[:5]}"
-    assert not extra, f"包内 src 多文件: {sorted(extra)[:5]}"
-    diff = [n for n in repo_files if repo_files[n] != norm_pkg[n]]
-    assert not diff, f"包内 src 与主仓库不一致: {diff[:5]}"
-    print(f"  [OK] src/ 与主仓库一致（{len(repo_files)} 个文件）")
-
-    # 7) assets 已带入
-    n_assets = sum(1 for n in blobs if n.startswith("cmd/fnmessagebots/assets/"))
-    assert n_assets > 0, "包内缺少 assets/"
-    print(f"  [OK] assets/ {n_assets} 个文件")
-
     # 8) bash 脚本必须 LF 行尾（CRLF 在 NAS 上会 bad interpreter）
-    for name in ("cmd/main", "cmd/install_callback", "cmd/upgrade_callback", "cmd/ui_port", "cmd/data_permissions"):
+    for name in ("cmd/main", "cmd/install_callback", "cmd/upgrade_callback", "cmd/lib_vol_override.sh"):
         assert blobs[name].count(b"\r\n") == 0, f"{name} 含 CRLF 行尾，NAS 上将无法执行"
     print("  [OK] bash 脚本均为 LF 行尾")
 

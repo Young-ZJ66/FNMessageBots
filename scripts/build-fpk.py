@@ -93,28 +93,13 @@ def copy_tree(src: Path, dst: Path, *, excludes: set[str] = CODE_EXCLUDES) -> No
 
 
 def build_payload(payload: Path) -> Path:
-    """组装 payload：fpk/ 脚手架 + 顶层 src/ + requirements + assets。"""
-    # 1) 脚手架（排除包内 src —— 构建时用顶层 src 填充）
-    code_dir = payload / "cmd" / "fnmessagebots"
+    """组装 payload。Docker 型：fpk/ 脚手架原样（应用代码在 GHCR 镜像内，
+    不需要打包 src）；镜像名已写死在 app/docker/docker-compose*.yaml。"""
     copy_tree(FPK_DIR, payload, excludes=CODE_EXCLUDES | {"src"})
-    # .gitignore 是给开发时的，不进包
     gi = payload / ".gitignore"
     if gi.exists():
         gi.unlink()
-
-    # 2) 顶层 src（实际应用代码）
-    (code_dir / "src").mkdir(parents=True, exist_ok=True)
-    copy_tree(ROOT / "src", code_dir / "src")
-
-    # 3) requirements 与 assets 以主仓库为准
-    shutil.copy2(ROOT / "requirements.txt", code_dir / "requirements.txt")
-    copy_tree(ROOT / "assets", code_dir / "assets")
-
-    # 包内不放运行数据
-    for junk in (code_dir / "data",):
-        if junk.exists():
-            shutil.rmtree(junk)
-    return code_dir
+    return payload
 
 
 def run_fnpack(fnpack: str, payload: Path, build_dir: Path) -> Path:
