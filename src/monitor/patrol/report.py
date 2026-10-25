@@ -61,7 +61,7 @@ def _collect_patrol_payload(_cfg: Any, _state: Dict[str, Any]) -> Dict[str, Any]
     uptime = _fmt_uptime(time.time() - boot_ts) if boot_ts > 0 else "--"
     startup_time = _fmt_boot_time(boot_ts) if boot_ts > 0 else "--"
     ups = _collect_ups_info()
-    disks = _collect_disk_items()
+    disks = _collect_disk_items(cfg)
     # 汇总盘温：取已采集物理盘温度的最高值（比单一传感器回退更贴近实况）
     disk_temps: List[float] = []
     for d in disks:

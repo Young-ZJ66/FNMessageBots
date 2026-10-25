@@ -7,3 +7,4 @@ psutil>=5.9.0
 Flask>=3.0.0
 docker>=7.0.0
 croniter>=2.0.0
+websocket-client>=1.6.0

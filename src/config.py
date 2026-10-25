@@ -35,6 +35,7 @@ _BOOL_CONFIG_KEYS = frozenset({
     "poll_batch_summary_enabled",
     "media_batch_summary_enabled",
     "nas_patrol_enabled",
+    "fnos_monitor_enabled",
     "notification_restart_enabled",
 })
 
@@ -123,6 +124,14 @@ class Config:
     nas_patrol_cron: str = "0 12 * * *"  # 标准 5 段：每天中午 12:00
     # 旧字段：仅用于迁移；新配置以 nas_patrol_cron 为准
     nas_patrol_interval_minutes: int = 720
+
+    # 飞牛监控接口（巡检盘温/健康的第一优先源）：读 fnOS WebSocket API，
+    # 与「硬盘信息」界面同源，无需块设备权限（容器内没有 /dev/sdX 也能用）。
+    # 凭据在配置页打码展示；接口不可用时自动回退 smartctl 命令链。
+    fnos_monitor_enabled: bool = False
+    fnos_monitor_url: str = "ws://127.0.0.1:5666"  # 容器部署需改成可达的 NAS 地址
+    fnos_monitor_user: str = ""
+    fnos_monitor_password: str = ""
 
     # 高级配置
     max_log_age: int = 7  # 应用运行日志 monitor_*.log 保留天数
@@ -319,6 +328,14 @@ class Config:
                 self.nas_patrol_interval_minutes = int(data["nas_patrol_interval_minutes"])
             except (TypeError, ValueError):
                 pass
+        if "fnos_monitor_enabled" in data:
+            self.fnos_monitor_enabled = as_bool(data["fnos_monitor_enabled"], False)
+        if "fnos_monitor_url" in data and isinstance(data["fnos_monitor_url"], str):
+            self.fnos_monitor_url = data["fnos_monitor_url"].strip() or "ws://127.0.0.1:5666"
+        if "fnos_monitor_user" in data and isinstance(data["fnos_monitor_user"], str):
+            self.fnos_monitor_user = data["fnos_monitor_user"].strip()
+        if "fnos_monitor_password" in data and isinstance(data["fnos_monitor_password"], str):
+            self.fnos_monitor_password = data["fnos_monitor_password"]
         if "poll_batch_summary_enabled" in data:
             self.poll_batch_summary_enabled = as_bool(data["poll_batch_summary_enabled"], False)
         if "media_batch_summary_enabled" in data:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import re
 import stat as stat_mod
@@ -1863,14 +1864,44 @@ def _patrol_fn_compose_vol_mounts_ready() -> bool:
     return _patrol_has_any_fn_vol_mount_in_container()
 
 
-def _collect_disk_items() -> List[Dict[str, str]]:
+def _fnos_overview_for_patrol(cfg: Any) -> Dict[str, Dict[str, Any]]:
+    """巡检用：拉一次飞牛监控接口的盘温/健康总览（未启用或不可用返回空）。
+
+    数据源故障绝不能阻断巡检——任何异常都吞掉并降级到 smartctl 命令链。
+    """
+    if cfg is None or not getattr(cfg, "fnos_monitor_enabled", False):
+        return {}
+    from .fnos_ws import fetch_disk_overview
+
+    try:
+        overview, err = fetch_disk_overview(
+            getattr(cfg, "fnos_monitor_url", ""),
+            getattr(cfg, "fnos_monitor_user", ""),
+            getattr(cfg, "fnos_monitor_password", ""),
+        )
+    except Exception as e:  # noqa: BLE001 — 数据源层已兜底，这里防意外类型
+        overview, err = {}, str(e)
+    if err:
+        logging.getLogger(__name__).warning(
+            "飞牛监控接口不可用，巡检盘温/健康回退 smartctl 命令链：%s", err
+        )
+        return {}
+    return overview
+
+
+def _collect_disk_items(cfg: Any = None) -> List[Dict[str, str]]:
     """按物理整盘（sda / nvme0n1…）生成巡检行，不再按 /volN 卷数分行。
 
-    温度/健康对整盘路径探测；剩余空间仍尽量从关联的 /vol 挂载反查（有则填，无则 --）。
+    温度/健康优先取飞牛监控接口（启用且配置了凭据时；一次 WebSocket 会话
+    覆盖全部盘，且能识别休眠盘——休眠盘不再做任何会唤醒硬盘的探测），
+    取不到的盘回退对整盘路径的 smartctl/sysfs 探测；剩余空间仍尽量从
+    关联的 /vol 挂载反查（有则填，无则 --）。
     """
     items: List[Dict[str, str]] = []
     vol_space_by_physical = _patrol_scan_vol_space_by_physical()
     whole_disks = _patrol_list_visible_whole_disks()
+    fnos_overview = _fnos_overview_for_patrol(cfg)
+    fnos_on = bool(fnos_overview) or bool(cfg is not None and getattr(cfg, "fnos_monitor_enabled", False))
 
     def _sort_disk_key(name: str) -> Tuple[int, str]:
         n = str(name or "").lower()
@@ -1881,23 +1912,44 @@ def _collect_disk_items() -> List[Dict[str, str]]:
         return (2, n)
 
     for physical in sorted(whole_disks, key=_sort_disk_key):
-        health = _smart_health_for_disk(physical)
-        temp = _smart_temp_for_disk(physical)
-        if temp in {"--", "—"}:
-            temp = _psutil_disk_temp_fallback(physical)
-        if health in {"--", "—"}:
-            if _patrol_sysfs_disk_running(physical) or temp not in {"--", "—"}:
-                health = "正常"
-        health_reason = (
-            ""
-            if health not in {"--", "—"}
-            else "未读到健康状态（smartctl/nvme/sysfs 均未取得，可能是命令缺失、权限或设备映射限制）"
-        )
-        temp_reason = (
-            ""
-            if temp not in {"--", "—"}
-            else "未读到温度（smartctl/nvme/sysfs 均未取得，可能是命令缺失、权限或设备映射限制）"
-        )
+        info = fnos_overview.get(physical) or {}
+        standby = bool(info.get("standby"))
+        temp = str(info.get("temp") or "")
+        passed = info.get("passed")
+        health = {True: "健康", False: "异常"}.get(passed, "")
+        if standby:
+            # 休眠盘：跳过一切探测（smartctl/sysfs 查询会唤醒硬盘），按休眠展示
+            temp, health = "", "休眠"
+        else:
+            if not temp:
+                t = _smart_temp_for_disk(physical)
+                if t in {"--", "—"}:
+                    t = _psutil_disk_temp_fallback(physical)
+                if t not in {"--", "—"}:
+                    temp = t
+            if not health:
+                h = _smart_health_for_disk(physical)
+                if h in {"--", "—"}:
+                    if _patrol_sysfs_disk_running(physical) or temp:
+                        h = "健康"
+                health = "" if h in {"--", "—"} else h
+        if health == "健康":
+            health = "正常"
+        health_reason = ""
+        if not health:
+            health = "--"
+            health_reason = "未读到健康状态（飞牛监控接口与 smartctl/nvme/sysfs 均未取得，可能是命令缺失、权限或设备映射限制）" if fnos_on else (
+                "未读到健康状态（smartctl/nvme/sysfs 均未取得，可能是命令缺失、权限或设备映射限制）"
+            )
+        temp_reason = ""
+        if not temp:
+            temp = "--"
+            temp_reason = "未读到温度（飞牛监控接口与 smartctl/nvme/sysfs 均未取得，可能是命令缺失、权限或设备映射限制）" if fnos_on else (
+                "未读到温度（smartctl/nvme/sysfs 均未取得，可能是命令缺失、权限或设备映射限制）"
+            )
+        if standby:
+            temp_reason = "硬盘休眠，已跳过探测（避免唤醒）"
+            health_reason = ""
         m_pick = _patrol_best_mount_for_physical(physical)
         free_s, size_s = _patrol_disk_space_gb_for_row(m_pick, physical, vol_space_by_physical)
         items.append(
