@@ -3,7 +3,16 @@ import sys
 import signal
 import socket
 import os
+import logging
 import traceback
+
+# 启动早期日志兜底：supervisor/巡检等模块在 setup_logging 之前的 warning
+# 也能进 docker logs / info.log（setup_logging 会清除并替换 handlers）
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,
+)
 from datetime import datetime
 import time
 from pathlib import Path

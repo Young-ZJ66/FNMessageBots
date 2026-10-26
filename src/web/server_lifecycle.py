@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import socketserver
 import threading
 import time
@@ -125,6 +126,12 @@ class UIServerSupervisor:
                 try:
                     if name == "TCP 配置入口":
                         listener.port = int(self._port)
+                    # 上次进程退出留下的 Unix socket 文件会让 bind 失败（Address already in use）；
+                    # 只有确认当前没有监听线程存活时才删除，避免误删正在服务的入口
+                    if listener.host.startswith("unix://"):
+                        stale = listener.host[len("unix://"):]
+                        if os.path.exists(stale):
+                            os.unlink(stale)
                     server = _LocalWSGIServer(
                         listener.host, listener.port,
                         listener.middleware(self._app.wsgi_app),

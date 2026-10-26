@@ -26,7 +26,6 @@ from flask import Flask, g, jsonify, request, render_template, send_from_directo
 
 from notifier.channel_params import validate_channel_json
 from notifier.multi_platform_notifier import MultiPlatformNotifier
-from web.access_guard import GatewayPrefixMiddleware
 from web.access_guard import LoginRateLimiter
 from web.access_guard import SetupCodeStore
 from web.access_guard import StripGatewayHeadersMiddleware
@@ -1101,13 +1100,7 @@ def create_app(on_config_saved=None) -> Flask:
     return app
 
 
-def _serve_forever(server, name: str) -> threading.Thread:
-    thread = threading.Thread(target=server.serve_forever, name=name, daemon=True)
-    thread.start()
-    return thread
-
-
-def start_ui_supervisor(on_config_saved=None) -> "UIServerSupervisor":
+def start_ui_supervisor(on_config_saved=None):
     """以监督方式启动配置 UI：TCP 与统一网关 Socket 两个入口分别监听、
     各自失败后自动重试（5 秒），某个入口的临时故障不会让后台永久不可用。
     返回的句柄带 stop()，供应用关停时先停 Web 再落盘。"""
